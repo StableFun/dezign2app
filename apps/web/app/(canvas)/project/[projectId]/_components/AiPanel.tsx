@@ -7,6 +7,10 @@ import { Button } from "@workspace/ui/components/button";
 import { Input } from "@workspace/ui/components/input";
 import { ScrollArea } from "@workspace/ui/components/scroll-area";
 import ReactMarkdown from "react-markdown";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "@workspace/backend/_generated/api";
+import { Id } from "@workspace/backend/_generated/dataModel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select";
 
 interface AiPanelProps {
   projectId: string;
@@ -21,12 +25,51 @@ type Message = {
 };
 
 export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
+  const [activeChatId, setActiveChatId] = useState<Id<"project_chats"> | null>(null);
+  const [hasInitializedChat, setHasInitializedChat] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     { role: "assistant", content: `Hi! I'm your Blueprint AI. I can help you design your system architecture. What would you like to build?` }
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const chats = useQuery(api.project_chat.getChats, { projectId: projectId as Id<"projects"> });
+  const convexMessages = useQuery(api.project_chat.getMessages, activeChatId ? { chatId: activeChatId } : "skip");
+
+  const createChat = useMutation(api.project_chat.createChat);
+  const addMessage = useMutation(api.project_chat.addMessage);
+
+  // Initialize activeChatId if null and chats exist, but only once on load
+  useEffect(() => {
+    if (chats && !hasInitializedChat) {
+      if (chats.length > 0) {
+        setActiveChatId(chats[0]!._id);
+      }
+      setHasInitializedChat(true);
+    }
+  }, [chats, hasInitializedChat]);
+
+  // Sync messages when activeChatId or convexMessages changes
+  useEffect(() => {
+    if (convexMessages) {
+      if (convexMessages.length > 0) {
+        setMessages(convexMessages.map(m => ({ role: m.role as "user" | "assistant", content: m.content })));
+      } else {
+        setMessages([
+          { role: "assistant", content: `Hi! I'm your Blueprint AI. I can help you design your system architecture. What would you like to build?` }
+        ]);
+      }
+    } else if (!activeChatId) {
+      setMessages([
+        { role: "assistant", content: `Hi! I'm your Blueprint AI. I can help you design your system architecture. What would you like to build?` }
+      ]);
+    }
+  }, [convexMessages, activeChatId]);
+
+  const handleNewChat = () => {
+    setActiveChatId(null);
+  };
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -43,6 +86,17 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
     setInput("");
     setMessages(prev => [...prev, { role: "user", content: userMessage }]);
     setIsLoading(true);
+    
+    let currentChatId = activeChatId;
+    if (!currentChatId) {
+      currentChatId = await createChat({
+        projectId: projectId as Id<"projects">,
+        title: userMessage.substring(0, 40) + (userMessage.length > 40 ? "..." : ""),
+      });
+      setActiveChatId(currentChatId);
+    }
+
+    addMessage({ chatId: currentChatId, role: "user", content: userMessage }).catch(console.error);
 
     try {
       const adapter = (window as any).canvasAdapter;
@@ -120,6 +174,10 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
         return newMsgs;
       });
 
+      if (assistantContent && currentChatId) {
+        addMessage({ chatId: currentChatId, role: "assistant", content: assistantContent }).catch(console.error);
+      }
+
     } catch (error) {
       console.error(error);
       setMessages(prev => [...prev, { role: "assistant", content: "Sorry, I encountered an error. Please try again." }]);
@@ -138,12 +196,31 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
       enable={{ left: true }}
       className="border-l bg-background shadow-xl flex flex-col h-full z-50 absolute right-0"
     >
-      <div className="flex items-center justify-between p-4 border-b shrink-0 bg-secondary/30">
-        <div className="flex items-center text-sm font-medium">
+      <div className="flex items-center justify-between p-4 border-b shrink-0 bg-secondary/30 gap-2">
+        <div className="flex items-center text-sm font-medium whitespace-nowrap">
           <Sparkles className="w-4 h-4 mr-2 text-primary" />
           Blueprint AI
         </div>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>
+        {chats !== undefined && (
+          <div className="flex-1 px-2 overflow-hidden flex justify-end">
+            <Select value={activeChatId || "new"} onValueChange={(val) => val === "new" ? handleNewChat() : setActiveChatId(val as Id<"project_chats">)}>
+              <SelectTrigger className="h-7 text-xs bg-background/50 border-none shadow-none focus:ring-0 w-[140px]">
+                <SelectValue placeholder="Select a chat" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="new" className="font-semibold text-primary">
+                  + New Chat
+                </SelectItem>
+                {chats.map(c => (
+                  <SelectItem key={c._id} value={c._id}>
+                    {c.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onClose}>
           <X className="w-4 h-4" />
         </Button>
       </div>
