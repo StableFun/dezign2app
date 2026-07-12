@@ -215,7 +215,9 @@ function Flow({ projectId, view }: BackendCanvasProps) {
 
   // Hydrate from Convex — useQuery is reactive, effect runs when data arrives
   useEffect(() => {
-    if (initialElements === undefined || hasHydrated.current) return; // still loading or already loaded
+    if (initialElements === undefined) return;
+    
+    const isFirstHydration = !hasHydrated.current;
     hasHydrated.current = true;
 
     const rawNodes: BackendNode[] = (initialElements.nodes ?? []).map((row: any) => {
@@ -242,6 +244,10 @@ function Flow({ projectId, view }: BackendCanvasProps) {
       };
     });
     
+    const store = useBackendCanvasStore.getState();
+    const pendingNodeIds = new Set(store.pendingNodeUpserts.map((n) => n.id));
+    const pendingEdgeIds = new Set(store.pendingEdgeUpserts.map((e) => e.id));
+
     // Ensure parent nodes appear before child nodes for React Flow
     const nodes: BackendNode[] = [];
     const addedIds = new Set<string>();
@@ -252,22 +258,47 @@ function Flow({ projectId, view }: BackendCanvasProps) {
         const parent = rawNodes.find((n) => n.id === node.parentId);
         if (parent) addNode(parent);
       }
+      
+      // Preserve local state for nodes currently being edited/dragged
+      if (!isFirstHydration && pendingNodeIds.has(node.id)) {
+        const localNode = store.nodes.find((n) => n.id === node.id);
+        if (localNode) {
+          nodes.push(localNode);
+          addedIds.add(node.id);
+          return;
+        }
+      }
+      
       nodes.push(node);
       addedIds.add(node.id);
     };
 
     rawNodes.forEach(addNode);
 
-    const edges: BackendEdge[] = (initialElements.edges ?? []).map((row: any) => ({
-      id: row.edgeId,
-      source: row.source,
-      target: row.target,
-      type: row.type,
-      sourceHandle: row.sourceHandle,
-      targetHandle: row.targetHandle,
-      data: row.data,
-      fractionalIndex: row.fractionalIndex,
-    }));
+    const edges: BackendEdge[] = (initialElements.edges ?? []).map((row: any) => {
+      if (!isFirstHydration && pendingEdgeIds.has(row.edgeId)) {
+        const localEdge = store.edges.find((e) => e.id === row.edgeId);
+        if (localEdge) return localEdge;
+      }
+      return {
+        id: row.edgeId,
+        source: row.source,
+        target: row.target,
+        type: row.type,
+        sourceHandle: row.sourceHandle,
+        targetHandle: row.targetHandle,
+        data: row.data,
+        fractionalIndex: row.fractionalIndex,
+      };
+    });
+    
+    // Check if anything actually changed to prevent unnecessary re-renders
+    if (!isFirstHydration) {
+       // A simple check: if length differs, or if any node/edge id differs
+       // Zustands setNodesAndEdges will trigger a re-render.
+       // It's usually fine to just call it.
+    }
+
     setNodesAndEdges(nodes, edges);
   }, [initialElements, setNodesAndEdges, view]);
 
@@ -609,7 +640,7 @@ export function BackendCanvas(props: BackendCanvasProps) {
   const deleteNode = useBackendCanvasStore(s => s.deleteNode);
 
   return (
-    <ReactFlowProvider>
+    <>
       <Flow {...props} />
       <AlertDialog open={nodesPendingDeletion.length > 0} onOpenChange={(open) => !open && setNodesPendingDeletion([])}>
         <AlertDialogContent>
@@ -631,6 +662,6 @@ export function BackendCanvas(props: BackendCanvasProps) {
         </AlertDialogContent>
       </AlertDialog>
       <ChatContainer />
-    </ReactFlowProvider>
+    </>
   );
 }

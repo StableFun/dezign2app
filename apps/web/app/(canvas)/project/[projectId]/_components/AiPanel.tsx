@@ -11,6 +11,8 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@workspace/backend/_generated/api";
 import { Id } from "@workspace/backend/_generated/dataModel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@workspace/ui/components/select";
+import { useAuth } from "@clerk/nextjs";
+import { useReactFlow } from "@xyflow/react";
 
 interface AiPanelProps {
   projectId: string;
@@ -33,6 +35,9 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { getToken } = useAuth();
+  
+  const reactFlow = useReactFlow();
 
   const chats = useQuery(api.project_chat.getChats, { projectId: projectId as Id<"projects"> });
   const convexMessages = useQuery(api.project_chat.getMessages, activeChatId ? { chatId: activeChatId } : "skip");
@@ -99,9 +104,17 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
     addMessage({ chatId: currentChatId, role: "user", content: userMessage }).catch(console.error);
 
     try {
-      const adapter = (window as any).canvasAdapter;
+      const adapter = (window as any).backendAdapter || (window as any).canvasAdapter;
 
       const canvasStateContext = adapter?.serialize() || "Canvas is empty.";
+      
+      const token = await getToken({ template: "convex" });
+
+      // Get current viewport center so AI can place nodes near the user
+      const viewportCenter = reactFlow.screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2
+      });
 
       const res = await fetch("/api/canvas-ai", {
         method: "POST",
@@ -109,7 +122,9 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
         body: JSON.stringify({
           projectId,
           messages: [{ role: "user", content: userMessage }],
-          canvasStateContext
+          canvasStateContext,
+          token,
+          viewportCenter
         })
       });
 
@@ -144,11 +159,8 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
                 return newMsgs;
               });
             } else if (data.type === "tool_call") {
-              // Apply the operation to the canvas immediately
-              if (adapter) {
-                adapter.applyOperations([data.op]);
-              }
-              // Optionally show a tiny log message
+              // The tool mutation is now executed directly on the backend by the agent.
+              // We just optionally show a tiny log message
               assistantContent += `\n*🔧 Tool used: \`${data.name}\`*\n`;
               setMessages(prev => {
                 const newMsgs = [...prev];
