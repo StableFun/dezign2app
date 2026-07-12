@@ -10,4 +10,10 @@ export const requirementsTables = {
     status: v.union(v.literal("pending"), v.literal("confirmed")),
     updatedAt: v.number(),
   }).index("by_project", ["projectId"]),
+  projectPlans: defineTable({
+    projectId: v.string(),
+    content: v.string(),
+    status: v.union(v.literal("proposed"), v.literal("approved")),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]),
 };

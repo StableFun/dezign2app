@@ -1,399 +1,14 @@
 import { ChatGroq } from "@langchain/groq";
-import { tool } from "@langchain/core/tools";
-import { z } from "zod";
-import { StateGraph, MessagesAnnotation, Annotation } from "@langchain/langgraph";
+import { StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
-import { ConvexHttpClient } from "convex/browser";
 
-import { BackendNodeType, BackendEdgeType } from "@workspace/canvas";
+import { GraphAnnotation, DEFAULT_REQUIREMENTS, DEFAULT_PLAN, requirementsSchema, ImplementationPlanState } from "./state.js";
+import { tools } from "./tools.js";
+import { systemPromptTemplate } from "./prompts.js";
+import { getConvexClient } from "./utils.js";
 
 const MAX_TOOL_CALLS = 6;
-
-// ----------------------------------------------------------------------------
-// GRAPH STATE
-// ----------------------------------------------------------------------------
-
-export const GraphAnnotation = Annotation.Root({
-  ...MessagesAnnotation.spec,
-  projectId: Annotation<string>(),
-  convexUrl: Annotation<string>(),
-  token: Annotation<string>(),
-  viewportCenter: Annotation<{ x: number; y: number }>(),
-  intent: Annotation<string>(),
-  canvasStateContext: Annotation<string>(),
-  toolCallCount: Annotation<number>({
-    reducer: (x, y) => x + y,
-    default: () => 0,
-  }),
-  requirements: Annotation<{
-    functional: string[];
-    nonFunctional: string[];
-    assumptions: string[];
-    status: "pending" | "confirmed";
-  }>({
-    reducer: (_, y) => y, // last-write-wins — this is a snapshot, not something to accumulate
-    default: () => ({ functional: [], nonFunctional: [], assumptions: [], status: "pending" }),
-  }),
-});
-
-const requirementsSchema = z.object({
-  functional: z.array(z.string()),
-  nonFunctional: z.array(z.string()),
-  assumptions: z.array(z.string()),
-});
-
-type RequirementsState = typeof GraphAnnotation.State["requirements"];
-
-function getConvexClient(state: typeof GraphAnnotation.State) {
-  if (!state.convexUrl) throw new Error("Missing convexUrl in state");
-  const client = new ConvexHttpClient(state.convexUrl);
-  if (state.token) {
-    client.setAuth(state.token);
-  }
-  return client;
-}
-
-// ----------------------------------------------------------------------------
-// PER-NODE-TYPE DATA SCHEMAS
-// Shared between add_node (discriminated union) and update_node (runtime lookup)
-// ----------------------------------------------------------------------------
-
-const resourceItemSchema = z.object({
-  id: z.string().optional(),
-  name: z.string(),
-});
-
-const kafkaDataSchema = z
-  .object({
-    topics: z
-      .array(
-        z.object({
-          id: z.string().optional(),
-          name: z.string(),
-          schema: z.string().optional(),
-          version: z.string().optional(),
-        })
-      )
-      .optional(),
-    kafkaBroker: z
-      .object({
-        partitions: z.number().optional(),
-        replication: z.number().optional(),
-        batchSize: z.number().optional(),
-        compression: z.string().optional(),
-        ttl: z.string().optional(),
-      })
-      .optional(),
-    delivery: z.string().optional(),
-    ordering: z.string().optional(),
-    retention: z.string().optional(),
-  })
-  .strict();
-
-const sqsDataSchema = z
-  .object({
-    queues: z.array(resourceItemSchema).optional(),
-    sqsBroker: z
-      .object({
-        visibilityTimeout: z.number().optional(),
-        delay: z.number().optional(),
-        fifo: z.boolean().optional(),
-      })
-      .optional(),
-    delivery: z.string().optional(),
-    failureHandling: z.string().optional(),
-  })
-  .strict();
-
-const redisPubSubDataSchema = z
-  .object({
-    channels: z.array(resourceItemSchema).optional(),
-    redisPubSubBroker: z.object({}).passthrough().optional(),
-    delivery: z.string().optional(),
-  })
-  .strict();
-
-const redisStreamsDataSchema = z
-  .object({
-    streams: z.array(resourceItemSchema).optional(),
-    redisBroker: z
-      .object({
-        consumerGroup: z.string().optional(),
-      })
-      .optional(),
-    delivery: z.string().optional(),
-    ordering: z.string().optional(),
-    retention: z.string().optional(),
-  })
-  .strict();
-
-const entityDataSchema = z
-  .object({
-    columns: z.array(
-      z.object({
-        name: z.string(),
-        type: z.string(),
-        isPrimaryKey: z.boolean().optional(),
-        isForeignKey: z.boolean().optional(),
-        isNotNull: z.boolean().optional(),
-        isUnique: z.boolean().optional(),
-      })
-    ),
-  })
-  .strict();
-
-// service / database / webClient / external / group have no special config today.
-const simpleDataSchema = z
-  .object({
-    description: z.string().optional(),
-  })
-  .strict();
-
-// Lookup used by update_node to validate `changes` against the node's existing type
-const nodeDataSchemas: Record<string, z.ZodTypeAny> = {
-  kafka: kafkaDataSchema,
-  sqs: sqsDataSchema,
-  "redis-pubsub": redisPubSubDataSchema,
-  "redis-streams": redisStreamsDataSchema,
-  entity: entityDataSchema,
-  service: simpleDataSchema,
-  database: simpleDataSchema,
-  webClient: simpleDataSchema,
-  external: simpleDataSchema,
-  group: simpleDataSchema,
-};
-
-function assignResourceIds(data: Record<string, any>) {
-  const resourceKeys = ["topics", "queues", "channels", "streams"];
-  for (const key of resourceKeys) {
-    if (Array.isArray(data[key])) {
-      data[key] = data[key].map((item: any, i: number) => ({
-        ...item,
-        id: item.id || `res-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 7)}`,
-      }));
-    }
-  }
-  return data;
-}
-
-// ----------------------------------------------------------------------------
-// CANVAS TOOLS (Direct Convex Mutations)
-// ----------------------------------------------------------------------------
-
-const addNodeSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("service"), label: z.string(), data: simpleDataSchema.optional() }),
-  z.object({ type: z.literal("database"), label: z.string(), data: simpleDataSchema.optional() }),
-  z.object({ type: z.literal("webClient"), label: z.string(), data: simpleDataSchema.optional() }),
-  z.object({ type: z.literal("external"), label: z.string(), data: simpleDataSchema.optional() }),
-  z.object({ type: z.literal("group"), label: z.string(), data: simpleDataSchema.optional() }),
-  z.object({ type: z.literal("entity"), label: z.string(), data: entityDataSchema }),
-  z.object({ type: z.literal("kafka"), label: z.string(), data: kafkaDataSchema.optional() }),
-  z.object({ type: z.literal("sqs"), label: z.string(), data: sqsDataSchema.optional() }),
-  z.object({ type: z.literal("redis-pubsub"), label: z.string(), data: redisPubSubDataSchema.optional() }),
-  z.object({ type: z.literal("redis-streams"), label: z.string(), data: redisStreamsDataSchema.optional() }),
-]);
-
-const addNodeTool = tool(
-  async (input, config) => {
-    const { type, label, data } = input;
-    const state = config.configurable?.state as typeof GraphAnnotation.State;
-    if (!state?.projectId) return "Error: projectId missing";
-    const convex = getConvexClient(state);
-
-    const nodeId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-
-    const offsetX = Math.floor(Math.random() * 600) - 300;
-    const offsetY = Math.floor(Math.random() * 600) - 300;
-    const position = state.viewportCenter
-      ? { x: state.viewportCenter.x + offsetX, y: state.viewportCenter.y + offsetY }
-      : { x: 100 + offsetX, y: 100 + offsetY };
-
-    const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
-
-    const processedData = assignResourceIds({ label, graphPosition: position, ...(data ?? {}) });
-
-    try {
-      await convex.mutation("canvas:upsertBackendNode" as any, {
-        projectId: state.projectId as string,
-        nodeId,
-        type,
-        position,
-        data: processedData,
-        fractionalIndex,
-      });
-      return `Added node ${label} of type ${type} with ID ${nodeId}`;
-    } catch (e: any) {
-      return `Failed to add node: ${e.message}`;
-    }
-  },
-  {
-    name: "add_node",
-    description: `Add a node to the backend canvas. Node types:
-- 'service': A backend API / microservice
-- 'database': A database reference node
-- 'sqs': Amazon SQS broker (data.queues, data.sqsBroker)
-- 'redis-pubsub': Redis Pub/Sub broker (data.channels, data.redisPubSubBroker)
-- 'kafka': Apache Kafka broker (data.topics, data.kafkaBroker)
-- 'redis-streams': Redis Streams broker (data.streams, data.redisBroker)
-- 'entity': A database table/schema entity (data.columns is required)
-- 'webClient': A frontend client or page
-- 'external': An external third-party API
-- 'group': A logical grouping node
-
-Each type only accepts its own data fields. Passing fields from another node type (e.g. sqsBroker on a kafka node) will be rejected.`,
-    schema: addNodeSchema,
-  }
-);
-
-const updateNodeTool = tool(
-  async ({ id, changes }, config) => {
-    const state = config.configurable?.state as typeof GraphAnnotation.State;
-    if (!state?.projectId) return "Error: projectId missing";
-    const convex = getConvexClient(state);
-
-    try {
-      const elements: any = await convex.query("canvas:getBackendElements" as any, {
-        projectId: state.projectId as string,
-      });
-      const node = elements.nodes.find((n: any) => n.nodeId === id);
-      if (!node) return `Error: Node ${id} not found`;
-
-      const schema = nodeDataSchemas[node.type];
-      if (!schema) return `Error: Unknown node type '${node.type}' for node ${id}`;
-
-      // Validate only the fields being changed, merged onto existing data,
-      // so we catch cross-type field leakage at update time too.
-      const merged = { ...node.data, ...changes };
-      const { label, graphPosition, ...dataToValidate } = merged;
-      const parsed = schema.safeParse(dataToValidate);
-      if (!parsed.success) {
-        return `Failed to update node: invalid fields for type '${node.type}': ${parsed.error.issues
-          .map((i) => `${i.path.join(".")}: ${i.message}`)
-          .join("; ")}`;
-      }
-
-      const processedChanges = assignResourceIds({ ...changes });
-
-      await convex.mutation("canvas:upsertBackendNode" as any, {
-        projectId: state.projectId as string,
-        nodeId: id,
-        type: node.type,
-        position: node.position,
-        data: { ...node.data, ...processedChanges },
-        fractionalIndex: node.fractionalIndex,
-      });
-      return `Updated node ${id}`;
-    } catch (e: any) {
-      return `Failed to update node: ${e.message}`;
-    }
-  },
-  {
-    name: "update_node",
-    description:
-      "Update an existing node on the backend canvas. Only specify the fields you want to change. Changes are validated against the node's existing type — fields belonging to other node types will be rejected.",
-    schema: z.object({
-      id: z.string(),
-      changes: z.record(z.any()).describe("Partial data fields to change, matching the node's existing type schema."),
-    }),
-  }
-);
-
-const deleteNodeTool = tool(
-  async ({ id }, config) => {
-    const state = config.configurable?.state as typeof GraphAnnotation.State;
-    if (!state?.projectId) return "Error: projectId missing";
-    const convex = getConvexClient(state);
-
-    try {
-      await convex.mutation("canvas:removeBackendNode" as any, {
-        projectId: state.projectId as string,
-        nodeId: id,
-      });
-      return `Deleted node ${id}`;
-    } catch (e: any) {
-      return `Failed to delete node: ${e.message}`;
-    }
-  },
-  {
-    name: "delete_node",
-    description: "Delete a node from the backend canvas.",
-    schema: z.object({ id: z.string() }),
-  }
-);
-
-const addEdgeTool = tool(
-  async ({ source, target, type, data, sourceHandle, targetHandle }, config) => {
-    const state = config.configurable?.state as typeof GraphAnnotation.State;
-    if (!state?.projectId) return "Error: projectId missing";
-    const convex = getConvexClient(state);
-
-    try {
-      const elements: any = await convex.query("canvas:getBackendElements" as any, {
-        projectId: state.projectId as string,
-      });
-      const sourceExists = elements.nodes.some((n: any) => n.nodeId === source);
-      const targetExists = elements.nodes.some((n: any) => n.nodeId === target);
-      if (!sourceExists) return `Failed to add edge: source node ${source} does not exist`;
-      if (!targetExists) return `Failed to add edge: target node ${target} does not exist`;
-
-      const edgeId = `edge-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
-
-      await convex.mutation("canvas:upsertBackendEdge" as any, {
-        projectId: state.projectId as string,
-        edgeId,
-        source,
-        target,
-        type,
-        sourceHandle: sourceHandle || undefined,
-        targetHandle: targetHandle || undefined,
-        data: data || {},
-        fractionalIndex,
-      });
-      return `Added edge from ${source} to ${target}`;
-    } catch (e: any) {
-      return `Failed to add edge: ${e.message}`;
-    }
-  },
-  {
-    name: "add_edge",
-    description: "Connect two nodes on the backend canvas. Both nodes must already exist.",
-    schema: z.object({
-      source: z.string().describe("Source node ID"),
-      target: z.string().describe("Target node ID"),
-      type: z.enum(["connection", "foreign-key", "message"]),
-      sourceHandle: z.string().optional(),
-      targetHandle: z.string().optional(),
-      data: z.any().optional(),
-    }),
-  }
-);
-
-const deleteEdgeTool = tool(
-  async ({ id }, config) => {
-    const state = config.configurable?.state as typeof GraphAnnotation.State;
-    if (!state?.projectId) return "Error: projectId missing";
-    const convex = getConvexClient(state);
-
-    try {
-      await convex.mutation("canvas:removeBackendEdge" as any, {
-        projectId: state.projectId as string,
-        edgeId: id,
-      });
-      return `Deleted edge ${id}`;
-    } catch (e: any) {
-      return `Failed to delete edge: ${e.message}`;
-    }
-  },
-  {
-    name: "delete_edge",
-    description: "Delete an edge from the backend canvas.",
-    schema: z.object({ id: z.string() }),
-  }
-);
-
-const tools = [addNodeTool, updateNodeTool, deleteNodeTool, addEdgeTool, deleteEdgeTool];
 
 // ----------------------------------------------------------------------------
 // AGENT NODES
@@ -432,25 +47,38 @@ export function createGraph() {
   };
 
   // Node: Intent Identifier — writes to state.intent, never touches message history.
-  // Also detects whether the latest message introduces a NEW requirement on top of
-  // an already-confirmed baseline. If so, it reopens the requirements gate
-  // (status -> "pending") so canvasAgent asks clarifying questions about just the
-  // addition before touching the canvas, instead of acting on it immediately.
+  // Also detects three things via one classification call:
+  // 1. affectsRequirements — does this message introduce something new on top of an
+  //    already-confirmed baseline? If so, reopen the requirements gate AND invalidate
+  //    any approved plan (assumptions may no longer hold).
+  // 2. readyForRequirementsSync — has the user given enough info to lock requirements in
+  //    (relevant only while requirements.status === "pending").
+  // 3. planDecision — did the user approve or ask to revise the proposed plan (relevant
+  //    only while implementationPlan.status === "proposed").
   const intentIdentifier = async (state: typeof GraphAnnotation.State) => {
     const lastMessage = state.messages[state.messages.length - 1];
     if (!lastMessage || lastMessage.type !== "human") return {};
 
     const conversationContext = state.messages
       .slice(-6)
-      .map((m) => `${m.getType().toUpperCase()}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+      .map((m: any) => `${m.getType().toUpperCase()}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
       .join("\n\n");
 
-    const existing = state.requirements ?? {
-      functional: [],
-      nonFunctional: [],
-      assumptions: [],
-      status: "pending" as const,
-    };
+    const existing = state.requirements ?? DEFAULT_REQUIREMENTS;
+    const plan = state.implementationPlan ?? DEFAULT_PLAN;
+
+    const gateContext =
+      existing.status !== "confirmed"
+        ? `The assistant is currently gathering requirements and may have just asked clarifying
+questions. Determine "readyForRequirementsSync": true if the user's latest message
+sufficiently answers those questions, or explicitly says to proceed / use assumptions.
+Otherwise false.`
+        : plan.status === "proposed"
+        ? `The assistant just proposed an implementation plan and is awaiting approval.
+Determine "planDecision": "approve" if the user accepts it (e.g. "looks good", "proceed",
+"build it"), "revise" if they want changes to the plan, or "not_applicable" if their message
+doesn't address the plan at all.`
+        : "";
 
     const intentPrompt = new SystemMessage(
       `Analyze the user's latest message in the context of the recent conversation and determine the intent.
@@ -461,58 +89,97 @@ Available Intents:
 
 Also determine "affectsRequirements": true only if the message introduces a NEW capability,
 feature, scale target, or constraint that is NOT already covered by the confirmed requirements
-below. Cosmetic/structural canvas edits (renames, repositioning, styling, "make it prettier")
-are always false. Answers to clarifying questions the assistant already asked are also false
-(that flow is handled separately, not as a "new" requirement).
+below. Cosmetic/structural canvas edits (renames, repositioning, styling) are always false.
+Answers to clarifying questions or plan-approval replies are also false (handled separately).
+
+${gateContext}
 
 Confirmed Requirements So Far:
 Functional: ${existing.functional.join("; ") || "none yet"}
 Non-Functional: ${existing.nonFunctional.join("; ") || "none yet"}
 
 Return ONLY JSON, no prose, no markdown fences:
-{ "intent": "CREATE_SYSTEM" | "EDIT_SYSTEM" | "CHAT", "affectsRequirements": boolean }
+{
+  "intent": "CREATE_SYSTEM" | "EDIT_SYSTEM" | "CHAT",
+  "affectsRequirements": boolean,
+  "readyForRequirementsSync": boolean,
+  "planDecision": "approve" | "revise" | "not_applicable"
+}
 
 Recent Conversation Context:
 ${conversationContext}`
     );
 
+    console.log("[DEBUG] Node: intentIdentifier invoking LLM");
     const response = await llm.invoke([intentPrompt]);
 
     let intent = "CHAT";
     let affectsRequirements = false;
+    let readyForRequirementsSync = false;
+    let planDecision: "approve" | "revise" | "not_applicable" = "not_applicable";
     try {
       const cleaned = response.content.toString().replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(cleaned);
       intent = parsed.intent ?? "CHAT";
       affectsRequirements = Boolean(parsed.affectsRequirements);
+      readyForRequirementsSync = Boolean(parsed.readyForRequirementsSync);
+      if (parsed.planDecision === "approve" || parsed.planDecision === "revise") {
+        planDecision = parsed.planDecision;
+      }
     } catch {
       // Fallback: treat the raw response as the intent string so a formatting slip
       // doesn't break routing entirely.
       intent = response.content.toString().trim();
     }
 
-    const update: Partial<typeof GraphAnnotation.State> = { intent };
+    const update: Partial<typeof GraphAnnotation.State> = {
+      intent,
+      readyForRequirementsSync,
+      planDecision,
+    };
 
     // Only reopen the gate if we currently have a confirmed baseline — if we're
     // already mid-clarification (status "pending"), leave it alone; that's handled
-    // by the canvasAgent -> syncRequirements flow below.
+    // by the requirementsAgent -> syncRequirements flow below. Reopening also
+    // invalidates any approved plan, since new requirements can change the
+    // architecture the plan was built around.
     if (affectsRequirements && existing.status === "confirmed") {
       update.requirements = { ...existing, status: "pending" };
+      update.implementationPlan = { ...plan, status: "none" };
     }
 
     return update;
   };
 
+  // Helper to strip tool calls from history for non-tool agents
+  // Prevents Groq API errors when tool calls exist in history but tools are not bound.
+  const sanitizeMessages = (messages: any[]) => {
+    return messages
+      .filter((m: any) => m.getType() !== "tool")
+      .map((m: any) => {
+        if (m.getType() === "ai" && m.tool_calls && m.tool_calls.length > 0) {
+          return new AIMessage(m.content || "(System design updated)");
+        }
+        return m;
+      });
+  };
+
   // Node: Chat Agent (No Tools)
   const chatAgent = async (state: typeof GraphAnnotation.State) => {
-    const systemMsg = new SystemMessage(systemPromptTemplate(state.canvasStateContext ?? "", state.requirements));
-    const response = await llm.invoke([systemMsg, ...state.messages]);
+    const systemMsg = new SystemMessage(
+      `You are a helpful system architecture assistant. The user is just chatting or asking questions. Do NOT attempt to use tools. Base your answers on the current canvas state: ${state.canvasStateContext ?? "Canvas is empty."}`
+    );
+    console.log("[DEBUG] Node: chatAgent invoking LLM");
+    const response = await llm.invoke([systemMsg, ...sanitizeMessages(state.messages)]);
     return { messages: [response] };
   };
 
   // Node: System Creator / Editor (With Tools)
   const canvasAgent = async (state: typeof GraphAnnotation.State) => {
-    const systemMsg = new SystemMessage(systemPromptTemplate(state.canvasStateContext ?? "", state.requirements));
+    const systemMsg = new SystemMessage(
+      systemPromptTemplate(state.canvasStateContext ?? "", state.requirements, state.implementationPlan)
+    );
+    console.log("[DEBUG] Node: canvasAgent invoking modelWithTools");
     const response = await modelWithTools.invoke([systemMsg, ...state.messages]);
     return { messages: [response] };
   };
@@ -520,21 +187,32 @@ ${conversationContext}`
   // Node: Reflect — reviews the outcome of tool calls and either retries
   // (emits new tool_calls) or wraps up with a summary.
   const reflectAgent = async (state: typeof GraphAnnotation.State) => {
-    const recentToolMsgs = state.messages.slice(-10).filter((m) => m.getType() === "tool");
+    const recentToolMsgs = state.messages.slice(-10).filter((m: any) => m.getType() === "tool");
     const hasFailure = recentToolMsgs.some(
-      (m) => typeof m.content === "string" && m.content.startsWith("Failed to")
+      (m: any) => typeof m.content === "string" && m.content.startsWith("Failed to")
     );
+
+    const plan = state.implementationPlan ?? DEFAULT_PLAN;
 
     const reflectionPrompt = new SystemMessage(
       hasFailure
         ? `Some of your last tool calls failed. Review the tool error messages below, correct the parameters, and retry ONLY the failed operations using your tools. If you cannot fix it, explain briefly and stop.\n\nRecent tool results:\n${recentToolMsgs
-            .map((m) => m.content)
+            .map((m: any) => m.content)
             .join("\n")}`
-        : `Review the tool results below against the user's original request. If everything needed has been done, respond with a brief confirmation summary and do NOT call any tools. If something is still missing, call the appropriate tool(s) to finish it.\n\nRecent tool results:\n${recentToolMsgs
-            .map((m) => m.content)
-            .join("\n")}`
+        : `Review the tool results below against the user's original request AND the approved
+implementation plan (technology choices, services, endpoints, messaging infra it called for).
+If everything the plan called for has been built, respond with a brief confirmation summary
+and do NOT call any tools. If something the plan specified is still missing or was built with
+the wrong technology/config, call the appropriate tool(s) to fix it.
+
+Approved Implementation Plan:
+${plan.content || "none"}
+
+Recent tool results:
+${recentToolMsgs.map((m: any) => m.content).join("\n")}`
     );
 
+    console.log("[DEBUG] Node: reflectAgent invoking modelWithTools");
     const response = await modelWithTools.invoke([...state.messages, reflectionPrompt]);
     return { messages: [response] };
   };
@@ -547,6 +225,7 @@ ${conversationContext}`
       const suffix = lastError
         ? `\n\nYour previous output was invalid: ${lastError}. Return valid JSON only, no prose, no markdown fences.`
         : "";
+      console.log(`[DEBUG] Helper: parseRequirementsWithRetry invoking LLM (attempt ${i})`);
       const response = await llm.invoke([new SystemMessage(prompt + suffix)]);
       try {
         const cleaned = response.content.toString().replace(/```json|```/g, "").trim();
@@ -558,12 +237,13 @@ ${conversationContext}`
     return null;
   };
 
-  // Node: syncRequirements — runs once canvasAgent has decided to actually act
-  // (emitted tool_calls) while requirements are not yet "confirmed". Covers both
-  // the first-ever build (existing requirements empty) and a later addition
-  // (existing requirements non-empty, just answered clarifying questions about
-  // the new piece) with the same merge-style prompt, so nothing already
-  // confirmed gets silently dropped.
+  // Node: syncRequirements — runs once the user has given enough info to lock
+  // requirements in (readyForRequirementsSync). Covers both the first-ever build
+  // (existing requirements empty) and a later addition (existing requirements
+  // non-empty, just answered clarifying questions about the new piece) with the
+  // same merge-style prompt, so nothing already confirmed gets silently dropped.
+  // Always hands off to planAgent next — a confirmed requirement always needs an
+  // approved plan before anything gets built.
   const syncRequirements = async (state: typeof GraphAnnotation.State) => {
     const existing = state.requirements ?? {
       functional: [],
@@ -574,7 +254,7 @@ ${conversationContext}`
 
     const conversation = state.messages
       .slice(-12)
-      .map((m) => `${m.getType()}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+      .map((m: any) => `${m.getType()}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
       .join("\n");
 
     const prompt = `Existing confirmed requirements (may be empty on a first-time build):
@@ -619,15 +299,157 @@ user just confirmed. Only remove or modify an item if the user explicitly contra
     return { requirements };
   };
 
+  // Node: requirementsAgent — no tools bound. Runs while requirements are not yet
+  // confirmed. Purely asks clarifying questions; structurally cannot call tools,
+  // so there's no risk of it building prematurely regardless of what it's told.
+  const requirementsAgent = async (state: typeof GraphAnnotation.State) => {
+    const req = state.requirements ?? DEFAULT_REQUIREMENTS;
+    const hasBaseline = req.functional.length > 0 || req.nonFunctional.length > 0 || req.assumptions.length > 0;
 
-  const routeIntent = (state: typeof GraphAnnotation.State) => {
-    if (state.intent === "CREATE_SYSTEM" || state.intent === "EDIT_SYSTEM") {
-      return "canvasAgent";
-    }
-    return "chatAgent";
+    const prompt = new SystemMessage(
+      hasBaseline
+        ? `The user just asked for something new on top of an already-built system.
+
+Existing Confirmed Requirements (baseline — do not lose or contradict these):
+Functional: ${req.functional.join("; ")}
+Non-Functional: ${req.nonFunctional.join("; ") || "none"}
+Assumptions: ${req.assumptions.join("; ") || "none"}
+
+Ask 3-4 focused clarifying questions about ONLY the new addition — its scale, how it
+interacts with the existing system, and any constraints. Do not re-ask about anything
+already confirmed above. Do not propose an implementation plan yet; that happens after
+this. Be concise.`
+        : `The user wants to design a new system. Ask 3-4 clarifying questions about their
+requirements — scale, read/write ratio, key features, constraints — before anything is
+built. Do not propose an implementation plan yet; that happens after this. Be concise.`
+    );
+
+    console.log("[DEBUG] Node: requirementsAgent invoking LLM");
+    const response = await llm.invoke([prompt, ...sanitizeMessages(state.messages)]);
+    return { messages: [response] };
   };
 
-  // Router: after canvasAgent's first pass
+  // Node: planAgent — no tools bound. Runs once requirements are confirmed but no
+  // plan has been approved yet. Proposes (or revises, given feedback) a detailed
+  // technology/architecture plan as plain text and asks for approval. Cannot call
+  // tools, so the canvas can't be touched until a human explicitly approves.
+  const planAgent = async (state: typeof GraphAnnotation.State) => {
+    const req = state.requirements ?? DEFAULT_REQUIREMENTS;
+    const priorPlan = state.implementationPlan ?? DEFAULT_PLAN;
+    const isRevision = priorPlan.status === "proposed" && priorPlan.content.length > 0;
+
+    const prompt = new SystemMessage(
+      `You are a senior software architect. ${
+        isRevision
+          ? "Revise the previously proposed implementation plan based on the user's latest feedback, keeping everything they did not object to."
+          : "Propose an implementation plan for review."
+      } This is a chat message a user will skim on their phone before approving — do NOT
+call any tools, just describe it.
+
+Confirmed Requirements:
+Functional: ${req.functional.join("; ") || "none"}
+Non-Functional: ${req.nonFunctional.join("; ") || "none"}
+Assumptions: ${req.assumptions.join("; ") || "none"}
+
+${isRevision ? `Previously Proposed Plan:\n${priorPlan.content}` : ""}
+
+FORMAT — this is as important as the content:
+- Target 150-250 words total. Hard cap 350.
+- One short bullet line per item. No paragraphs, no markdown tables, no sub-bullets more
+  than one level deep.
+- No "why not X / alternatives considered" discussion, no generic explanations of what a
+  pattern or technology is. State the choice, not the reasoning essay behind it.
+- Skip any section that isn't needed for these requirements entirely (e.g. no caching
+  section if nothing warrants a cache).
+- Name real, specific technologies (e.g. "PostgreSQL", "Kafka"), never vague terms like
+  "a suitable database" — but state each in a single clause, not a justified paragraph.
+
+CONTENT — cover only what applies, each as terse bullets:
+- **Architecture**: one line naming the pattern (monolith/microservices/serverless/event-driven).
+- **Services**: one line per service — name, tech stack, one-clause responsibility, 2-4
+  representative endpoints as "METHOD /path" (no request/response bodies here).
+- **Data storage**: one line per store — engine + what it holds.
+- **Messaging** (only if needed): one line — which broker + what flows through it.
+- **Caching** (only if needed): one line — what's cached.
+- **Client**: one line — framework + how it talks to the backend.
+- **Ops**: one line — scaling/deployment, one line — security/auth.
+
+End with a single short line asking the user to approve or say what to change. Do not
+restate the requirements back to them.`
+    );
+
+    console.log("[DEBUG] Node: planAgent invoking LLM");
+    const response = await llm.invoke([prompt, ...sanitizeMessages(state.messages.slice(-8))]);
+    const content = response.content.toString();
+    const implementationPlan: ImplementationPlanState = { content, status: "proposed" };
+
+    if (state.projectId && state.convexUrl) {
+      try {
+        const convex = getConvexClient(state);
+        await convex.mutation("requirements:upsertPlan" as any, {
+          projectId: state.projectId,
+          content,
+          status: "proposed",
+        });
+      } catch {
+        // Non-fatal — this turn's in-memory plan is still correct for the approval check.
+      }
+    }
+
+    return { messages: [response], implementationPlan };
+  };
+
+  // Node: approvePlan — deterministic, no LLM call. Flips the plan to "approved"
+  // once the user has signed off, then hands off to canvasAgent to actually build.
+  const approvePlan = async (state: typeof GraphAnnotation.State) => {
+    const plan = state.implementationPlan ?? DEFAULT_PLAN;
+    const approved: ImplementationPlanState = { ...plan, status: "approved" };
+
+    if (state.projectId && state.convexUrl) {
+      try {
+        const convex = getConvexClient(state);
+        await convex.mutation("requirements:upsertPlan" as any, {
+          projectId: state.projectId,
+          content: approved.content,
+          status: "approved",
+        });
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    return { implementationPlan: approved };
+  };
+
+  // Router: after intent classification, walk the three gates in order —
+  // requirements confirmed? plan approved? only then reach canvasAgent (with tools).
+  const routeAfterIntent = (state: typeof GraphAnnotation.State) => {
+    const req = state.requirements ?? DEFAULT_REQUIREMENTS;
+    if (req.status !== "confirmed") {
+      return state.readyForRequirementsSync ? "syncRequirements" : "requirementsAgent";
+    }
+
+    const plan = state.implementationPlan ?? DEFAULT_PLAN;
+    if (plan.status !== "approved") {
+      if (plan.status === "proposed" && state.planDecision === "approve") {
+        return "approvePlan";
+      }
+      if (state.intent === "CHAT" && state.planDecision === "not_applicable") {
+        return "chatAgent";
+      }
+      return "planAgent";
+    }
+
+    if (state.intent !== "CREATE_SYSTEM" && state.intent !== "EDIT_SYSTEM") {
+      return "chatAgent";
+    }
+
+    return "canvasAgent";
+  };
+
+  // Router: after canvasAgent's first pass. canvasAgent is only ever reached once
+  // requirements are confirmed and the plan is approved, so no defensive
+  // requirements/plan check is needed here — just the tool-call loop.
   const shouldContinue = (state: typeof GraphAnnotation.State) => {
     const lastMessage = state.messages[state.messages.length - 1];
     const hasToolCalls =
@@ -635,13 +457,7 @@ user just confirmed. Only remove or modify an item if the user explicitly contra
       "tool_calls" in lastMessage &&
       Array.isArray((lastMessage as any).tool_calls) &&
       (lastMessage as any).tool_calls.length > 0;
-
-    if (!hasToolCalls) return "__end__";
-    // canvasAgent decided to act while requirements aren't confirmed — either the
-    // very first build, or the user just answered clarifying questions about a
-    // new addition. Sync/merge requirements before letting the tools run.
-    if (state.requirements?.status !== "confirmed") return "syncRequirements";
-    return "tools";
+    return hasToolCalls ? "tools" : "__end__";
   };
 
   // Router: after tools run, always go reflect (unless capped)
@@ -677,19 +493,25 @@ user just confirmed. Only remove or modify an item if the user explicitly contra
   const workflow = new StateGraph(GraphAnnotation)
     .addNode("intentIdentifier", intentIdentifier)
     .addNode("chatAgent", chatAgent)
-    .addNode("canvasAgent", canvasAgent)
+    .addNode("requirementsAgent", requirementsAgent)
     .addNode("syncRequirements", syncRequirements)
+    .addNode("planAgent", planAgent)
+    .addNode("approvePlan", approvePlan)
+    .addNode("canvasAgent", canvasAgent)
     .addNode("tools", customToolNode)
     .addNode("reflectAgent", reflectAgent)
     .addNode("capReached", capReached)
 
     .addEdge("__start__", "intentIdentifier")
-    .addConditionalEdges("intentIdentifier", routeIntent)
+    .addConditionalEdges("intentIdentifier", routeAfterIntent)
 
     .addEdge("chatAgent", "__end__")
+    .addEdge("requirementsAgent", "__end__")
+    .addEdge("syncRequirements", "planAgent")
+    .addEdge("planAgent", "__end__")
+    .addEdge("approvePlan", "canvasAgent")
 
     .addConditionalEdges("canvasAgent", shouldContinue)
-    .addEdge("syncRequirements", "tools")
     .addConditionalEdges("tools", afterTools)
     .addConditionalEdges("reflectAgent", shouldContinueReflect)
 
@@ -697,56 +519,3 @@ user just confirmed. Only remove or modify an item if the user explicitly contra
 
   return workflow.compile();
 }
-
-export const systemPromptTemplate = (canvasStateContext: string, requirements?: RequirementsState) => {
-  const req = requirements ?? { functional: [], nonFunctional: [], assumptions: [], status: "pending" as const };
-  const hasBaseline = req.functional.length > 0 || req.nonFunctional.length > 0 || req.assumptions.length > 0;
-
-  let requirementsBlock: string;
-
-  if (req.status === "confirmed") {
-    requirementsBlock = `Confirmed Requirements:
-    Functional: ${req.functional.join("; ") || "none"}
-    Non-Functional: ${req.nonFunctional.join("; ") || "none"}
-    Assumptions: ${req.assumptions.join("; ") || "none"}`;
-  } else if (hasBaseline) {
-    // Status flipped back to "pending" by intentIdentifier: the user asked for
-    // something new on top of an already-confirmed system.
-    requirementsBlock = `Existing Confirmed Requirements (baseline — do not lose or contradict these):
-    Functional: ${req.functional.join("; ")}
-    Non-Functional: ${req.nonFunctional.join("; ") || "none"}
-    Assumptions: ${req.assumptions.join("; ") || "none"}
-
-    NEW REQUEST PENDING CLARIFICATION: the user just asked for something that adds to or
-    changes the above. Do NOT modify the canvas yet. Ask 3-4 focused clarifying questions
-    about ONLY the new addition (its scale, how it interacts with existing components, any
-    constraints) — do not re-ask about things already confirmed above. 
-    Format your questions as a clear Markdown numbered list. Proceed with tools
-    only after the user answers or explicitly says to proceed with assumptions.`;
-  } else {
-    requirementsBlock = `Requirements not yet confirmed — this is the first-time design for this
-    project. Ask 3-4 clarifying questions about scale, read/write ratio, and key features
-    before using any tools. Format your questions as a clear Markdown numbered list. 
-    Proceed with tools only after the user answers or says to proceed with assumptions.`;
-  }
-
-  return `You are an expert AI software architect and UI designer. 
-    Your job is to assist the user in designing their system using the provided tools.
-    You are currently viewing the system design canvas.
-
-    If working on a Database Schema, use 'entity' nodes and populate 'data.columns' with an array of { name, type, isPrimaryKey, isForeignKey, isNotNull, isUnique }. Use 'group' nodes to group tables, and 'foreign-key' edges to connect tables, specifying 'sourceCardinality' and 'targetCardinality' (1 or N) in 'data'.
-
-    When adding messaging infrastructure, choose the correct node type based on the messaging pattern:
-    - Use 'sqs' for Amazon SQS message queues. Store queues in 'data.queues'. Set broker settings under 'data.sqsBroker'. Valid fields: delivery, failureHandling, and sqsBroker: { visibilityTimeout, delay, fifo: boolean }.
-    - Use 'redis-pubsub' for Redis Pub/Sub channels. Store channels in 'data.channels'. Valid fields: delivery, and redisPubSubBroker.
-    - Use 'kafka' for Apache Kafka messaging brokers. Store topics in 'data.topics'. Set broker configuration under 'data.kafkaBroker' (partitions, replication, compression, ttl, batchSize). Valid fields: delivery, ordering, retention.
-    - Use 'redis-streams' for Redis Streams messaging brokers. Store streams in 'data.streams'. Set broker configuration under 'data.redisBroker' (consumerGroup). Valid fields: delivery, ordering, retention.
-    NEVER mix implementation fields across node types. These are now strictly enforced — a tool call with the wrong fields for a type will be rejected.
-
-    ${requirementsBlock}
-
-    Current Canvas State:
-    ${canvasStateContext}
-
-    Be concise in your textual responses. Prefer using tools to update the canvas to match the user's intent.`;
-};

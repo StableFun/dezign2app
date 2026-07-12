@@ -146,7 +146,7 @@ export type BackendNode = {
     graphPosition?: { x: number; y: number };
     schemaPosition?: { x: number; y: number };
     // New fields for Graph tab detailed nodes
-    events?: { id: string; name: string }[];
+    events?: { id: string; name: string; event?: string }[];
     inputs?: { id: string; name: string }[];
     logic?: { id: string; name: string }[];
     outputs?: { id: string; name: string }[];

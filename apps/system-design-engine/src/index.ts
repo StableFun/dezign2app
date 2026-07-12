@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
-import { createGraph, systemPromptTemplate } from './ai/agent.js';
+import { createGraph } from './ai/agent.js';
 import { HumanMessage, SystemMessage, AIMessage } from '@langchain/core/messages';
 import { ConvexHttpClient } from 'convex/browser';
 
@@ -34,6 +34,7 @@ app.post('/canvas-ai', async (c) => {
     const agent = createGraph();
     
     const existingRequirements = await client.query("requirements:get" as any, { projectId });
+    const existingPlan = await client.query("requirements:getPlan" as any, { projectId });
     
     // Prepare initial state
     const formattedMessages = messages.map((m: any) => 
@@ -48,7 +49,8 @@ app.post('/canvas-ai', async (c) => {
         token,
         viewportCenter,
         canvasStateContext: canvasStateContext || "Canvas is empty.",
-        requirements: existingRequirements ?? { functional: [], nonFunctional: [], assumptions: [], status: "pending" }
+        requirements: existingRequirements ?? { functional: [], nonFunctional: [], assumptions: [], status: "pending" },
+        implementationPlan: existingPlan ?? { content: "", status: "none" }
       },
       { version: 'v2' }
     );
@@ -63,7 +65,7 @@ app.post('/canvas-ai', async (c) => {
           // This prevents internal nodes like intentIdentifier or syncRequirements
           // from leaking their raw JSON or internal prompts to the UI.
           const nodeName = event.metadata?.langgraph_node;
-          if (nodeName && !['chatAgent', 'canvasAgent', 'reflectAgent'].includes(nodeName)) {
+          if (nodeName && !['chatAgent', 'canvasAgent', 'reflectAgent', 'requirementsAgent', 'planAgent'].includes(nodeName)) {
             continue;
           }
 

@@ -1,0 +1,523 @@
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+import { GraphAnnotation } from "./state.js";
+import { getConvexClient } from "./utils.js";
+import { EDGE_TYPE_MAP } from "@workspace/canvas";
+import {
+  simpleDataSchema,
+  entityDataSchema,
+  kafkaDataSchema,
+  sqsDataSchema,
+  redisPubSubDataSchema,
+  redisStreamsDataSchema,
+  nodeDataSchemas,
+  assignResourceIds,
+} from "./schemas.js";
+
+export const addNodeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("service"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("database"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("webClient"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("external"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("group"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("entity"), label: z.string(), data: entityDataSchema }),
+  z.object({ type: z.literal("kafka"), label: z.string(), data: kafkaDataSchema.optional() }),
+  z.object({ type: z.literal("sqs"), label: z.string(), data: sqsDataSchema.optional() }),
+  z.object({ type: z.literal("redis-pubsub"), label: z.string(), data: redisPubSubDataSchema.optional() }),
+  z.object({ type: z.literal("redis-streams"), label: z.string(), data: redisStreamsDataSchema.optional() }),
+]);
+
+export const addNodeTool = tool(
+  async (input, config) => {
+    const { type, label, data } = input;
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    const nodeId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const offsetX = Math.floor(Math.random() * 600) - 300;
+    const offsetY = Math.floor(Math.random() * 600) - 300;
+    const position = state.viewportCenter
+      ? { x: state.viewportCenter.x + offsetX, y: state.viewportCenter.y + offsetY }
+      : { x: 100 + offsetX, y: 100 + offsetY };
+
+    const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+
+    const processedData = assignResourceIds({ label, graphPosition: position, ...(data ?? {}) });
+
+    try {
+      await convex.mutation("canvas:upsertBackendNode" as any, {
+        projectId: state.projectId as string,
+        nodeId,
+        type,
+        position,
+        data: processedData,
+        fractionalIndex,
+      });
+      return `Added node ${label} of type ${type} with ID ${nodeId}`;
+    } catch (e: any) {
+      return `Failed to add node: ${e.message}`;
+    }
+  },
+  {
+    name: "add_node",
+    description: `Add a node to the backend canvas. Node types:
+- 'service': A backend API / microservice
+- 'database': A database reference node
+- 'sqs': Amazon SQS broker (data.queues, data.sqsBroker)
+- 'redis-pubsub': Redis Pub/Sub broker (data.channels, data.redisPubSubBroker)
+- 'kafka': Apache Kafka broker (data.topics, data.kafkaBroker)
+- 'redis-streams': Redis Streams broker (data.streams, data.redisBroker)
+- 'entity': A database table/schema entity (data.columns is required)
+- 'webClient': A frontend client or page
+- 'external': An external third-party API
+- 'group': A logical grouping node
+
+Each type only accepts its own data fields. Passing fields from another node type (e.g. sqsBroker on a kafka node) will be rejected.`,
+    schema: addNodeSchema,
+  }
+);
+
+export const updateNodeTool = tool(
+  async ({ id, changes }, config) => {
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    try {
+      const elements: any = await convex.query("canvas:getBackendElements" as any, {
+        projectId: state.projectId as string,
+      });
+      const node = elements.nodes.find((n: any) => n.nodeId === id);
+      if (!node) return `Error: Node ${id} not found`;
+
+      const schema = nodeDataSchemas[node.type];
+      if (!schema) return `Error: Unknown node type '${node.type}' for node ${id}`;
+
+      // Validate only the fields being changed, merged onto existing data,
+      // so we catch cross-type field leakage at update time too.
+      const merged = { ...node.data, ...changes };
+      const { label, graphPosition, ...dataToValidate } = merged;
+      const parsed = schema.safeParse(dataToValidate);
+      if (!parsed.success) {
+        return `Failed to update node: invalid fields for type '${node.type}': ${parsed.error.issues
+          .map((i: any) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")}`;
+      }
+
+      const processedChanges = assignResourceIds({ ...changes });
+
+      await convex.mutation("canvas:upsertBackendNode" as any, {
+        projectId: state.projectId as string,
+        nodeId: id,
+        type: node.type,
+        position: node.position,
+        data: { ...node.data, ...processedChanges },
+        fractionalIndex: node.fractionalIndex,
+      });
+      return `Updated node ${id}`;
+    } catch (e: any) {
+      return `Failed to update node: ${e.message}`;
+    }
+  },
+  {
+    name: "update_node",
+    description:
+      "Update an existing node on the backend canvas. Only specify the fields you want to change. Changes are validated against the node's existing type — fields belonging to other node types will be rejected.",
+    schema: z.object({
+      id: z.string(),
+      changes: z.record(z.any()).describe("Partial data fields to change, matching the node's existing type schema."),
+    }),
+  }
+);
+
+export const deleteNodeTool = tool(
+  async ({ id }, config) => {
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    try {
+      await convex.mutation("canvas:removeBackendNode" as any, {
+        projectId: state.projectId as string,
+        nodeId: id,
+      });
+      return `Deleted node ${id}`;
+    } catch (e: any) {
+      return `Failed to delete node: ${e.message}`;
+    }
+  },
+  {
+    name: "delete_node",
+    description: "Delete a node from the backend canvas.",
+    schema: z.object({ id: z.string() }),
+  }
+);
+
+export const addEdgeTool = tool(
+  async ({ source, target, type, data, sourceHandle, targetHandle }, config) => {
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    try {
+      const elements: any = await convex.query("canvas:getBackendElements" as any, {
+        projectId: state.projectId as string,
+      });
+      const sourceExists = elements.nodes.some((n: any) => n.nodeId === source);
+      const targetExists = elements.nodes.some((n: any) => n.nodeId === target);
+      if (!sourceExists) return `Failed to add edge: source node ${source} does not exist`;
+      if (!targetExists) return `Failed to add edge: target node ${target} does not exist`;
+
+      const edgeId = `edge-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+
+      await convex.mutation("canvas:upsertBackendEdge" as any, {
+        projectId: state.projectId as string,
+        edgeId,
+        source,
+        target,
+        type,
+        sourceHandle: sourceHandle || undefined,
+        targetHandle: targetHandle || undefined,
+        data: data || {},
+        fractionalIndex,
+      });
+      return `Added edge from ${source} to ${target}`;
+    } catch (e: any) {
+      return `Failed to add edge: ${e.message}`;
+    }
+  },
+  {
+    name: "add_edge",
+    description: "Connect two nodes on the backend canvas. Both nodes must already exist.",
+    schema: z.object({
+      source: z.string().describe("Source node ID"),
+      target: z.string().describe("Target node ID"),
+      type: z.enum(["connection", "foreign-key", "message"]),
+      sourceHandle: z.string().optional(),
+      targetHandle: z.string().optional(),
+      data: z.any().optional(),
+    }),
+  }
+);
+
+export const deleteEdgeTool = tool(
+  async ({ id }, config) => {
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    try {
+      await convex.mutation("canvas:removeBackendEdge" as any, {
+        projectId: state.projectId as string,
+        edgeId: id,
+      });
+      return `Deleted edge ${id}`;
+    } catch (e: any) {
+      return `Failed to delete edge: ${e.message}`;
+    }
+  },
+  {
+    name: "delete_edge",
+    description: "Delete an edge from the backend canvas.",
+    schema: z.object({ id: z.string() }),
+  }
+);
+
+export const addServiceNodeTool = tool(
+  async (input, config) => {
+    const { label, description, techStack, port, cors, baseUrl, endpoints, inputs, outputs, logic } = input;
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    const nodeId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const offsetX = Math.floor(Math.random() * 600) - 300;
+    const offsetY = Math.floor(Math.random() * 600) - 300;
+    const position = state.viewportCenter
+      ? { x: state.viewportCenter.x + offsetX, y: state.viewportCenter.y + offsetY }
+      : { x: 100 + offsetX, y: 100 + offsetY };
+    const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+
+    const processedEndpoints = (endpoints || []).map((ep: any) => ({
+      ...ep,
+      id: ep.id || Math.random().toString(36).slice(2, 9),
+      publishedEvents: ep.publishedEvents?.map((pe: any) => ({
+        ...pe,
+        id: pe.id || Math.random().toString(36).slice(2, 9),
+      })),
+      consumedEvents: ep.consumedEvents?.map((ce: any) => ({
+        ...ce,
+        id: ce.id || Math.random().toString(36).slice(2, 9),
+      })),
+    }));
+
+    try {
+      await convex.mutation("canvas:upsertBackendNode" as any, {
+        projectId: state.projectId as string,
+        nodeId,
+        type: "service",
+        position,
+        data: {
+          label,
+          description,
+          techStack,
+          port,
+          cors,
+          baseUrl,
+          endpoints: processedEndpoints,
+          inputs: inputs || [],
+          outputs: outputs || [],
+          logic: logic || [],
+          graphPosition: position,
+        },
+        fractionalIndex,
+      });
+
+      const edgesToCreate = [];
+      for (const ep of processedEndpoints) {
+        if (ep.publishedEvents) {
+          for (const pe of ep.publishedEvents) {
+            if (pe.targetNodeId) {
+              edgesToCreate.push({
+                source: nodeId,
+                target: pe.targetNodeId,
+                sourceHandle: `publishedEvents-out-${pe.id}`,
+                targetHandle: undefined,
+                type: EDGE_TYPE_MAP["published-event-out→resource-def-in"] || "message",
+              });
+            }
+          }
+        }
+        if (ep.consumedEvents) {
+          for (const ce of ep.consumedEvents) {
+            if (ce.targetNodeId) {
+              edgesToCreate.push({
+                source: ce.targetNodeId,
+                target: nodeId,
+                sourceHandle: undefined,
+                targetHandle: `consumedEvents-in-${ce.id}`,
+                type: EDGE_TYPE_MAP["resource-def-out→consumed-event-in"] || "message",
+              });
+            }
+          }
+        }
+      }
+
+      for (const edge of edgesToCreate) {
+        const edgeId = `edge-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const edgeFractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+        await convex.mutation("canvas:upsertBackendEdge" as any, {
+          projectId: state.projectId as string,
+          edgeId,
+          source: edge.source,
+          target: edge.target,
+          type: edge.type,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+          fractionalIndex: edgeFractionalIndex,
+        });
+      }
+
+      return `Added service node ${label} with ID ${nodeId} and ${edgesToCreate.length} event edges`;
+    } catch (e: any) {
+      return `Failed to add service node: ${e.message}`;
+    }
+  },
+  {
+    name: "add_service_node",
+    description: "Add a complete microservice node to the backend canvas, including its REST endpoints, business logic, inputs, outputs, and message broker event publications/subscriptions. Automatically creates edges to connected message brokers (targetNodeId).",
+    schema: z.object({
+      label: z.string().describe("Name of the service"),
+      description: z.string().optional(),
+      techStack: z.string().optional(),
+      port: z.string().optional(),
+      cors: z.boolean().optional(),
+      baseUrl: z.string().optional(),
+      endpoints: z.array(z.object({
+        name: z.string().describe("Endpoint path (e.g., /api/users)"),
+        type: z.string().describe("HTTP method (GET, POST, etc.)"),
+        output: z.string().optional().describe("JSON response schema"),
+        businessLogic: z.string().optional(),
+        publishedEvents: z.array(z.object({
+          name: z.string(),
+          kind: z.string().optional(),
+          schema: z.string().optional(),
+          targetNodeId: z.string().optional().describe("Target node ID to automatically connect to (e.g. queue or pubsub node)")
+        })).optional(),
+        consumedEvents: z.array(z.object({
+          name: z.string(),
+          kind: z.string().optional(),
+          schema: z.string().optional(),
+          handlerLogic: z.string().optional(),
+          targetNodeId: z.string().optional().describe("Source node ID to automatically connect from (e.g. queue or pubsub node)")
+        })).optional()
+      })).optional(),
+      inputs: z.array(z.any()).optional(),
+      outputs: z.array(z.any()).optional(),
+      logic: z.array(z.any()).optional(),
+    })
+  }
+);
+
+export const addKafkaNodeTool = tool(
+  async (input, config) => {
+    const { label, description, topics, kafkaBroker, delivery, ordering, retention } = input;
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    const nodeId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const offsetX = Math.floor(Math.random() * 600) - 300;
+    const offsetY = Math.floor(Math.random() * 600) - 300;
+    const position = state.viewportCenter
+      ? { x: state.viewportCenter.x + offsetX, y: state.viewportCenter.y + offsetY }
+      : { x: 100 + offsetX, y: 100 + offsetY };
+    const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+
+    const processedData = assignResourceIds({
+      label,
+      description,
+      topics: topics || [],
+      kafkaBroker,
+      delivery,
+      ordering,
+      retention,
+      graphPosition: position,
+    });
+
+    try {
+      await convex.mutation("canvas:upsertBackendNode" as any, {
+        projectId: state.projectId as string,
+        nodeId,
+        type: "kafka",
+        position,
+        data: processedData,
+        fractionalIndex,
+      });
+
+      return `Added kafka node ${label} with ID ${nodeId} and ${topics?.length || 0} topics`;
+    } catch (e: any) {
+      return `Failed to add kafka node: ${e.message}`;
+    }
+  },
+  {
+    name: "add_kafka_node",
+    description: "Add an Apache Kafka message broker node to the backend canvas, including its topics and broker configuration.",
+    schema: z.object({
+      label: z.string().describe("Name of the Kafka broker (e.g., 'Main Kafka Cluster')"),
+      description: z.string().optional(),
+      topics: z.array(z.object({
+        name: z.string().describe("Name of the topic"),
+        schema: z.string().optional(),
+        version: z.string().optional()
+      })).optional(),
+      kafkaBroker: z.object({
+        partitions: z.number().optional(),
+        replication: z.number().optional(),
+        batchSize: z.number().optional(),
+        compression: z.string().optional(),
+        ttl: z.string().optional(),
+      }).optional(),
+      delivery: z.string().optional().describe("Message delivery guarantee (e.g., 'At-least-once')"),
+      ordering: z.string().optional(),
+      retention: z.string().optional(),
+    })
+  }
+);
+
+export const addClientNodeTool = tool(
+  async (input, config) => {
+    const { label, description, events } = input;
+    const state = config.configurable?.state as typeof GraphAnnotation.State;
+    if (!state?.projectId) return "Error: projectId missing";
+    const convex = getConvexClient(state);
+
+    const nodeId = `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const offsetX = Math.floor(Math.random() * 600) - 300;
+    const offsetY = Math.floor(Math.random() * 600) - 300;
+    const position = state.viewportCenter
+      ? { x: state.viewportCenter.x + offsetX, y: state.viewportCenter.y + offsetY }
+      : { x: 100 + offsetX, y: 100 + offsetY };
+    const fractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+
+    const processedEvents = (events || []).map((ev: any) => ({
+      ...ev,
+      id: ev.id || Math.random().toString(36).slice(2, 9),
+    }));
+
+    try {
+      await convex.mutation("canvas:upsertBackendNode" as any, {
+        projectId: state.projectId as string,
+        nodeId,
+        type: "webClient",
+        position,
+        data: {
+          label,
+          description,
+          events: processedEvents,
+          graphPosition: position,
+        },
+        fractionalIndex,
+      });
+
+      const edgesToCreate = [];
+      for (const ev of processedEvents) {
+        if (ev.targetNodeId && ev.targetEndpointId) {
+          edgesToCreate.push({
+            source: nodeId,
+            target: ev.targetNodeId,
+            sourceHandle: `events-${ev.id}`,
+            targetHandle: `endpoint-in-${ev.targetEndpointId}`,
+            type: "connection",
+          });
+        } else if (ev.targetNodeId) {
+          edgesToCreate.push({
+            source: nodeId,
+            target: ev.targetNodeId,
+            sourceHandle: `events-${ev.id}`,
+            targetHandle: undefined,
+            type: "connection",
+          });
+        }
+      }
+
+      for (const edge of edgesToCreate) {
+        const edgeId = `edge-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const edgeFractionalIndex = "a0" + Date.now() + Math.random().toString(36).slice(2, 6);
+        await convex.mutation("canvas:upsertBackendEdge" as any, {
+          projectId: state.projectId as string,
+          edgeId,
+          source: edge.source,
+          target: edge.target,
+          type: edge.type as any,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+          fractionalIndex: edgeFractionalIndex,
+        });
+      }
+
+      return `Added client node ${label} with ID ${nodeId} and ${events?.length || 0} events`;
+    } catch (e: any) {
+      return `Failed to add client node: ${e.message}`;
+    }
+  },
+  {
+    name: "add_client_node",
+    description: "Add a Web Client (frontend) node to the backend canvas, including a collection of user events on the page.",
+    schema: z.object({
+      label: z.string().describe("Name of the client page/component (e.g., 'Login Page')"),
+      description: z.string().optional(),
+      events: z.array(z.object({
+        name: z.string().describe("Logical name of the action (e.g., 'sendMessage', 'fetchData')"),
+        event: z.string().optional().describe("The DOM event that triggers it (e.g., 'click', 'submit', 'pageLoad')"),
+        targetNodeId: z.string().optional().describe("If this event triggers an API call, specify the target service node ID"),
+        targetEndpointId: z.string().optional().describe("If this event triggers an API call, specify the target endpoint ID on the service node"),
+      })).optional(),
+    })
+  }
+);
+
+export const tools = [addNodeTool, updateNodeTool, deleteNodeTool, addEdgeTool, deleteEdgeTool, addServiceNodeTool, addKafkaNodeTool, addClientNodeTool];

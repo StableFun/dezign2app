@@ -84,8 +84,8 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
     }
   }, [messages]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.SubmitEvent | React.KeyboardEvent) => {
+    if (e) e.preventDefault();
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
@@ -289,6 +289,12 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit(e);
+              }
+            }}
             placeholder="Ask AI to design your system..."
             className="flex-1"
             disabled={isLoading}
