@@ -49,6 +49,20 @@ export const featureTables = {
     .index("by_user_status", ["userId", "status"])
     .index("by_org_status", ["organizationId", "status"]),
 
+  project_chats: defineTable({
+    projectId: v.id("projects"),
+    title: v.string(),
+    createdAt: v.number(),
+  }).index("by_project", ["projectId"]),
+
+  project_chat_messages: defineTable({
+    chatId: v.id("project_chats"),
+    role: v.union(v.literal("user"), v.literal("assistant")),
+    content: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_chat", ["chatId"]),
+
   // Granular tldraw records — one row per shape/asset/camera
   canvas_frontend_records: defineTable({
     projectId: v.id("projects"),

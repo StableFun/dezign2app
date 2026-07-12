@@ -15,6 +15,7 @@ import type * as billing from "../billing.js";
 import type * as canvas from "../canvas.js";
 import type * as http from "../http.js";
 import type * as kanban from "../kanban.js";
+import type * as project_chat from "../project_chat.js";
 import type * as projects from "../projects.js";
 import type * as schema_auth from "../schema/auth.js";
 import type * as schema_features from "../schema/features.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   canvas: typeof canvas;
   http: typeof http;
   kanban: typeof kanban;
+  project_chat: typeof project_chat;
   projects: typeof projects;
   "schema/auth": typeof schema_auth;
   "schema/features": typeof schema_features;
