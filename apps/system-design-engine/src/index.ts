@@ -14,10 +14,15 @@ app.get('/', (c) => {
 app.post('/canvas-ai', async (c) => {
   try {
     const body = await c.req.json();
-    const { projectId, messages, canvasStateContext } = body;
+    const { projectId, messages, canvasStateContext, convexUrl: bodyConvexUrl, token, viewportCenter } = body;
 
-    if (!messages) {
+    if (!messages || !projectId) {
       return c.text("Missing required fields", 400);
+    }
+
+    const convexUrl = bodyConvexUrl || process.env.CONVEX_URL;
+    if (!convexUrl) {
+      return c.text("Missing CONVEX_URL environment variable", 500);
     }
 
     const agent = createGraph();
@@ -29,7 +34,13 @@ app.post('/canvas-ai', async (c) => {
     ];
 
     const graphStream = await agent.streamEvents(
-      { messages: formattedMessages },
+      { 
+        messages: formattedMessages,
+        projectId,
+        convexUrl,
+        token,
+        viewportCenter
+      },
       { version: 'v2' }
     );
 
@@ -45,26 +56,11 @@ app.post('/canvas-ai', async (c) => {
           }
           if (chunk.tool_calls && chunk.tool_calls.length > 0) {
              for (const call of chunk.tool_calls) {
-               // Translate LangChain tool call to CanvasOperation
-               let op = null;
-               const args = call.args;
                const name = call.name;
-               
-               if (name === "add_node") {
-                 op = { op: "add_node", type: args.type, label: args.label, data: args.data };
-               } else if (name === "update_node") {
-                 op = { op: "update_node", id: args.id, changes: args.changes };
-               } else if (name === "delete_node") {
-                 op = { op: "delete_node", id: args.id };
-               } else if (name === "add_edge") {
-                 op = { op: "add_edge", source: args.source, target: args.target, type: args.type, data: args.data };
-               } else if (name === "run_auto_layout") {
-                 op = { op: "run_auto_layout" };
-               }
-
-               if (op) {
-                 await streamWriter.write(JSON.stringify({ type: 'tool_call', op, name }) + '\n');
-               }
+               // We no longer need to translate and send CanvasOperation
+               // because the tools apply mutations directly to Convex.
+               // We just stream a notification to the frontend that a tool was used.
+               await streamWriter.write(JSON.stringify({ type: 'tool_call', name }) + '\n');
              }
           }
         }

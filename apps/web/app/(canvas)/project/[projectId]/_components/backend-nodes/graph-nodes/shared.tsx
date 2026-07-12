@@ -772,9 +772,9 @@ export const MessagingResourceList = ({
       </div>
 
       <div className="flex flex-col">
-        {items.map((item) => (
+        {items.map((item, index) => (
           <MessagingResourceRow
-            key={item.id}
+            key={item.id || `item-${index}`}
             item={item}
             isEditing={editingId === item.id}
             setEditingId={setEditingId}

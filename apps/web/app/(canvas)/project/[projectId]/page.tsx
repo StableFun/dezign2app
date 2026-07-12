@@ -10,6 +10,7 @@ import { CanvasToolbar } from "./_components/CanvasToolbar";
 import { BackendCanvas } from "./_components/BackendCanvas";
 import { AiPanel } from "./_components/AiPanel";
 import { Loader2 } from "lucide-react";
+import { ReactFlowProvider } from "@xyflow/react";
 
 export default function ProjectCanvasPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = React.use(params);
@@ -44,26 +45,28 @@ export default function ProjectCanvasPage({ params }: { params: Promise<{ projec
   }
 
   return (
-    <div className="flex flex-col h-full w-full relative">
-      <CanvasToolbar
-        projectName={project.name}
-        view={view}
-        setView={setView}
-        aiPanelOpen={aiPanelOpen}
-        setAiPanelOpen={setAiPanelOpen}
-      />
-      
-      <div className="flex-1 relative overflow-hidden flex">
-        <div className="flex-1 relative">
-          <BackendCanvas projectId={projectId} view={view} />
-        </div>
-        
-        <AiPanel 
-          projectId={projectId} 
-          isOpen={aiPanelOpen} 
-          onClose={() => setAiPanelOpen(false)} 
+    <ReactFlowProvider>
+      <div className="flex flex-col h-full w-full relative">
+        <CanvasToolbar
+          projectName={project.name}
+          view={view}
+          setView={setView}
+          aiPanelOpen={aiPanelOpen}
+          setAiPanelOpen={setAiPanelOpen}
         />
+        
+        <div className="flex-1 relative overflow-hidden flex">
+          <div className="flex-1 relative">
+            <BackendCanvas projectId={projectId} view={view} />
+          </div>
+          
+          <AiPanel 
+            projectId={projectId} 
+            isOpen={aiPanelOpen} 
+            onClose={() => setAiPanelOpen(false)} 
+          />
+        </div>
       </div>
-    </div>
+    </ReactFlowProvider>
   );
 }
