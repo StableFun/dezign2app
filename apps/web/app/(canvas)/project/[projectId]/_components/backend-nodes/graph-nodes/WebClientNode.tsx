@@ -139,9 +139,9 @@ const TriggerDialog = ({ isOpen, onClose, event, targetNode, endpoint }: Trigger
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold font-mono bg-muted text-muted-foreground border border-border uppercase tracking-wider">
-              {event?.name}
+              {event?.event || event?.name || "event"}
             </span>
-            <span>Trigger Endpoint</span>
+            <span>{event?.name && event.name !== event.event ? event.name : "Trigger Endpoint"}</span>
           </DialogTitle>
           <DialogDescription className="flex flex-col gap-1.5 pt-1 text-xs text-muted-foreground">
             <span>
@@ -312,7 +312,8 @@ const TriggerDialog = ({ isOpen, onClose, event, targetNode, endpoint }: Trigger
 
 const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEvent }: any) => {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [selectedEvent, setSelectedEvent] = useState("");
+  const [editName, setEditName] = useState("");
+  const [editEvent, setEditEvent] = useState("");
   const [customEvent, setCustomEvent] = useState("");
 
   const edges = useBackendCanvasStore((s) => s.edges);
@@ -346,15 +347,16 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
   };
 
   const handleAdd = () => {
-    const newItems = [...items, { id: generateId(), name: "" }];
+    const newItems = [...items, { id: generateId(), name: "New Action", event: "click" }];
     updateNode(nodeId, { data: { ...data, events: newItems } });
     setEditingId(newItems[newItems.length - 1].id);
-    setSelectedEvent("");
+    setEditName("New Action");
+    setEditEvent("click");
     setCustomEvent("");
   };
 
-  const handleUpdate = (id: string, name: string) => {
-    const newItems = items.map((item: any) => item.id === id ? { ...item, name } : item);
+  const handleUpdate = (id: string, name: string, event: string) => {
+    const newItems = items.map((item: any) => item.id === id ? { ...item, name, event } : item);
     updateNode(nodeId, { data: { ...data, events: newItems } });
   };
 
@@ -364,12 +366,9 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
   };
 
   const saveEvent = (id: string) => {
-     const finalEvent = selectedEvent === "other" ? customEvent : selectedEvent;
-     if (!finalEvent.trim()) {
-        handleDelete(id);
-     } else {
-        handleUpdate(id, finalEvent.trim());
-     }
+     const finalEvent = editEvent === "other" ? customEvent : editEvent;
+     const finalName = editName.trim() || "Unnamed Action";
+     handleUpdate(id, finalName, finalEvent.trim());
      setEditingId(null);
   };
 
@@ -395,6 +394,7 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
         {items.map((item: any) => {
           const isEditing = editingId === item.id;
           const link = getLinkedEndpoint(item.id);
+          const displayEvent = item.event || item.name;
 
           return (
             <div key={item.id} className="flex flex-col px-3 py-1.5 border-b last:border-b-0 text-xs relative group/row hover:bg-secondary/20 nodrag">
@@ -406,82 +406,72 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
                 style={{ top: '50%' }} 
               />
               {isEditing ? (
-                 <div className="flex flex-col gap-1 w-full" onBlur={(e) => {
+                 <div className="flex flex-col gap-1.5 w-full" onBlur={(e) => {
                     const related = e.relatedTarget as HTMLElement | null;
                     if (related?.closest('[role="combobox"]')) return;
                     if (related?.closest('[role="listbox"]')) return;
                     if (related?.closest('[data-radix-popper-content-wrapper]')) return;
 
-                    // Only trigger blur if focus leaves the container entirely
                     if (!e.currentTarget.contains(related)) {
-                       if (selectedEvent === "other") {
-                          saveEvent(item.id);
-                       } else if (!selectedEvent) {
-                          handleDelete(item.id);
-                          setEditingId(null);
-                       } else {
-                          setEditingId(null);
-                       }
+                       saveEvent(item.id);
                     }
                  }}>
-                    <Select 
-                       value={selectedEvent} 
-                       onValueChange={(v) => {
-                         setSelectedEvent(v);
-                         if (v !== "other") {
-                           handleUpdate(item.id, v);
-                           setEditingId(null);
-                         }
+                    <Input 
+                       value={editName}
+                       onChange={(e) => setEditName(e.target.value)}
+                       placeholder="Action name (e.g. sendMessage)"
+                       className="h-6 text-xs"
+                       autoFocus
+                       onKeyDown={(e) => {
+                          if (e.key === "Enter") saveEvent(item.id);
+                          if (e.key === "Escape") setEditingId(null);
                        }}
-                       onOpenChange={(open) => {
-                         if (!open && !selectedEvent) {
-                            handleDelete(item.id);
-                            setEditingId(null);
-                         } else if (!open && selectedEvent !== "other") {
-                            setEditingId(null);
-                         }
-                       }}
-                    >
-                      <SelectTrigger className="h-6 text-xs w-full outline-none focus:ring-0 focus:ring-offset-0 bg-transparent border-input">
-                        <SelectValue placeholder="Select event..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {EVENT_OPTIONS.map(opt => (
-                           <SelectItem key={opt} value={opt} className="text-xs">{opt}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    
-                    {selectedEvent === "other" && (
-                       <Input 
-                          value={customEvent}
-                          onChange={(e) => setCustomEvent(e.target.value)}
-                          placeholder="Event name"
-                          className="h-6 text-xs mt-1"
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                               saveEvent(item.id);
-                            }
-                            if (e.key === "Escape") {
-                               if (!item.name) handleDelete(item.id);
-                               setEditingId(null);
-                            }
-                          }}
-                       />
-                    )}
+                    />
+                    <div className="flex items-center gap-1">
+                      <Select 
+                         value={editEvent} 
+                         onValueChange={(v) => setEditEvent(v)}
+                      >
+                        <SelectTrigger className="h-6 text-xs w-full bg-background focus:ring-1 focus:ring-ring focus:ring-offset-0">
+                          <SelectValue placeholder="Event type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {EVENT_OPTIONS.map(opt => (
+                             <SelectItem key={opt} value={opt} className="text-xs">{opt}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      
+                      {editEvent === "other" && (
+                         <Input 
+                            value={customEvent}
+                            onChange={(e) => setCustomEvent(e.target.value)}
+                            placeholder="Custom event"
+                            className="h-6 text-xs w-full"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveEvent(item.id);
+                              if (e.key === "Escape") setEditingId(null);
+                            }}
+                         />
+                      )}
+                    </div>
                  </div>
               ) : (
                 <div 
-                  className="flex items-center justify-between w-full cursor-pointer" 
+                  className="flex items-center justify-between w-full cursor-pointer gap-2" 
                   onClick={() => { 
                       setEditingId(item.id); 
-                      const isStandard = EVENT_OPTIONS.includes(item.name);
-                      setSelectedEvent(isStandard ? item.name : (item.name ? "other" : "")); 
-                      setCustomEvent(isStandard ? "" : item.name);
+                      setEditName(item.name || "");
+                      const evt = item.event || item.name;
+                      const isStandard = EVENT_OPTIONS.includes(evt);
+                      setEditEvent(isStandard ? evt : (evt ? "other" : "click")); 
+                      setCustomEvent(isStandard ? "" : evt);
                   }}
                 >
-                   <span className="font-medium truncate">{item.name}</span>
+                   <div className="flex flex-col gap-0.5 overflow-hidden">
+                       <span className="font-medium truncate">{item.name}</span>
+                       <span className="text-[9px] text-muted-foreground font-mono truncate">{displayEvent}</span>
+                   </div>
                    <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                      {link && (
                        <button
