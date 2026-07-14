@@ -361,14 +361,14 @@ export const EntityNode = ({ id, data, selected }: NodeProps<BackendNode>) => {
                   onMouseDown={(e) => e.preventDefault()}
                 >
                   <div className="flex items-center gap-2 overflow-hidden">
-                    {col.isPrimaryKey && <span className="text-[9px] bg-yellow-500/20 text-yellow-600 px-1 rounded font-bold shrink-0">PK</span>}
-                    {col.isForeignKey && <span className="text-[9px] bg-blue-500/20 text-blue-600 px-1 rounded font-bold shrink-0">FK</span>}
+                    {col.isPrimaryKey && <Badge className="text-[9px] px-1 rounded font-bold" variant="secondary">PK</Badge>}
+                    {col.isForeignKey && <Badge className="text-[9px] px-1 rounded font-bold" variant="secondary">FK</Badge>}
                     <span className="font-medium truncate max-w-[100px]">{col.name}</span>
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-2">
                     <span className="text-muted-foreground">{col.type}</span>
-                    {col.isNotNull && <span className="text-[9px] bg-red-500/10 text-red-600 px-1 rounded font-bold">NN</span>}
-                    {col.isUnique && <span className="text-[9px] bg-purple-500/10 text-purple-600 px-1 rounded font-bold">UQ</span>}
+                    {col.isNotNull && <Badge className="text-[9px] px-1 rounded font-bold" variant="outline">NN</Badge>}
+                    {col.isUnique && <Badge className="text-[9px] px-1 rounded font-bold" variant="outline">UQ</Badge>}
                     <div 
                       className="opacity-0 group-hover/row:opacity-100 flex items-center justify-center p-0.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-all"
                       onClick={(e) => {
@@ -552,6 +552,7 @@ import {
   ExternalNode, 
   WebClientNode 
 } from "./graph-nodes";
+import { Badge } from "@workspace/ui/components/badge";
 
 // Map for React Flow
 export const nodeTypes = {
