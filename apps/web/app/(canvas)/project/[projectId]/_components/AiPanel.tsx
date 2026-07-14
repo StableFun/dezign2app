@@ -4,7 +4,6 @@ import React, { useState, useRef, useEffect } from "react";
 import { Resizable } from "re-resizable";
 import { X, Send, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@workspace/ui/components/button";
-import { Input } from "@workspace/ui/components/input";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useMutation, useQuery } from "convex/react";
@@ -170,6 +169,15 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
                 } else if (data.name === "add_service_node") {
                   const label = data.args.label || "Unknown Service";
                   argsStr = `\nAdded **${label}** (service)`;
+                } else if (data.name === "add_client_node") {
+                  const label = data.args.label || "Unknown Client";
+                  argsStr = `\nAdded **${label}** (client)`;
+                } else if (data.name === "add_schema_group") {
+                  const label = data.args.label || "Unknown Schema Group";
+                  argsStr = `\nAdded **${label}** (schema group)`;
+                } else if (data.name === "add_kafka_node") {
+                  const label = data.args.label || "Unknown Kafka Broker";
+                  argsStr = `\nAdded **${label}** (kafka)`;
                 } else if (data.name === "add_edge") {
                   const nodes = useBackendCanvasStore.getState().nodes;
                   const sourceNode = nodes.find((n) => n.id === data.args.source);

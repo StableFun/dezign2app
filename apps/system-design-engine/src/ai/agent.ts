@@ -1,4 +1,5 @@
 import { ChatGroq } from "@langchain/groq";
+import { RunnableConfig } from "@langchain/core/runnables";
 import { StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { SystemMessage, AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
@@ -54,7 +55,7 @@ export function createGraph() {
   //    (relevant only while requirements.status === "pending").
   // 3. planDecision — did the user approve or ask to revise the proposed plan (relevant
   //    only while implementationPlan.status === "proposed").
-  const intentIdentifier = async (state: typeof GraphAnnotation.State) => {
+  const intentIdentifier = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const lastMessage = state.messages[state.messages.length - 1];
     if (!lastMessage || lastMessage.type !== "human") return {};
 
@@ -110,7 +111,7 @@ ${conversationContext}`
     );
 
     console.log("[DEBUG] Node: intentIdentifier invoking LLM");
-    const response = await llm.invoke([intentPrompt]);
+    const response = await llm.invoke([intentPrompt], config);
 
     let intent = "CHAT";
     let affectsRequirements = false;
@@ -164,29 +165,29 @@ ${conversationContext}`
   };
 
   // Node: Chat Agent (No Tools)
-  const chatAgent = async (state: typeof GraphAnnotation.State) => {
+  const chatAgent = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const systemMsg = new SystemMessage(
       `You are a helpful system architecture assistant. The user is just chatting or asking questions. Do NOT attempt to use tools. Base your answers on the current canvas state: ${state.canvasStateContext ?? "Canvas is empty."}`
     );
     console.log("[DEBUG] Node: chatAgent invoking LLM");
-    const response = await llm.invoke([systemMsg, ...sanitizeMessages(state.messages)]);
+    const response = await llm.invoke([systemMsg, ...sanitizeMessages(state.messages)], config);
     return { messages: [response] };
   };
 
   // Node: System Creator / Editor (With Tools)
-  const canvasAgent = async (state: typeof GraphAnnotation.State) => {
+  const canvasAgent = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const systemMsg = new SystemMessage(
       systemPromptTemplate(state.canvasStateContext ?? "", state.requirements, state.implementationPlan)
     );
     console.log("[DEBUG] Node: canvasAgent invoking modelWithTools");
     await delay(1500);
-    const response = await modelWithTools.invoke([systemMsg, ...state.messages]);
+    const response = await modelWithTools.invoke([systemMsg, ...state.messages], config);
     return { messages: [response] };
   };
 
   // Node: Reflect — reviews the outcome of tool calls and either retries
   // (emits new tool_calls) or wraps up with a summary.
-  const reflectAgent = async (state: typeof GraphAnnotation.State) => {
+  const reflectAgent = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const recentToolMsgs = state.messages.slice(-10).filter((m) => m.type === "tool");
     const hasFailure = recentToolMsgs.some(
       (m) => typeof m.content === "string" && m.content.startsWith("Failed to")
@@ -196,13 +197,15 @@ ${conversationContext}`
 
     const reflectionPrompt = new HumanMessage(
       hasFailure
-        ? `Some of your last tool calls failed. Review the tool error messages below, correct the parameters, and retry ONLY the failed operations using your tools. If you cannot fix it, explain briefly and stop.\n\nRecent tool results:\n${recentToolMsgs
+        ? `Some of your last tool calls failed. Review the tool error messages below, correct the parameters, and retry ONLY the failed operations using your tools. If you cannot fix it, explain briefly and stop. DO NOT hallucinate tools like 'add_entity' - use 'add_schema' or 'add_schema_group' instead.\n\nRecent tool results:\n${recentToolMsgs
             .map((m) => m.content)
             .join("\n")}`
         : `Review the tool results below against the user's original request AND the approved
 implementation plan (technology choices, services, endpoints, messaging infra it called for).
 If everything the plan called for has been built or already exists on the canvas AND all necessary connections (edges) have been drawn, respond with a brief confirmation summary
 and do NOT call any tools. If something the plan specified is still missing from BOTH the recent tool results AND the current canvas state, call the appropriate tool(s) to add it.
+
+CRITICAL: DO NOT hallucinate tools like 'add_entity'. If you need to add a schema/entity, use the 'add_schema' or 'add_schema_group' tools.
 
 CRITICAL: Make sure nodes are actually connected! If you just created nodes, you must now use their IDs from the tool results below to call the 'add_edge' tool and connect them together (e.g. WebClient -> Service, Service -> Database). Pay close attention to the generated IDs for endpoints and events to properly set sourceHandle and targetHandle.
 
@@ -218,20 +221,20 @@ ${recentToolMsgs.map((m) => m.content).join("\n")}`
 
     console.log("[DEBUG] Node: reflectAgent invoking modelWithTools");
     await delay(1500);
-    const response = await modelWithTools.invoke([...state.messages, reflectionPrompt]);
+    const response = await modelWithTools.invoke([...state.messages, reflectionPrompt], config);
     return { messages: [response] };
   };
 
   // Helper: ask the LLM for requirements JSON, retrying once on malformed output
   // before giving up (never throws — caller decides the fallback).
-  const parseRequirementsWithRetry = async (prompt: string, maxAttempts = 2) => {
+  const parseRequirementsWithRetry = async (prompt: string, config: RunnableConfig, maxAttempts = 2) => {
     let lastError = "";
     for (let i = 0; i < maxAttempts; i++) {
       const suffix = lastError
         ? `\n\nYour previous output was invalid: ${lastError}. Return valid JSON only, no prose, no markdown fences.`
         : "";
       console.log(`[DEBUG] Helper: parseRequirementsWithRetry invoking LLM (attempt ${i})`);
-      const response = await llm.invoke([new SystemMessage(prompt + suffix)]);
+      const response = await llm.invoke([new SystemMessage(prompt + suffix)], config);
       try {
         const cleaned = response.content.toString().replace(/```json|```/g, "").trim();
         return requirementsSchema.parse(JSON.parse(cleaned));
@@ -249,7 +252,7 @@ ${recentToolMsgs.map((m) => m.content).join("\n")}`
   // same merge-style prompt, so nothing already confirmed gets silently dropped.
   // Always hands off to planAgent next — a confirmed requirement always needs an
   // approved plan before anything gets built.
-  const syncRequirements = async (state: typeof GraphAnnotation.State) => {
+  const syncRequirements = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const existing = state.requirements ?? {
       functional: [],
       nonFunctional: [],
@@ -278,7 +281,7 @@ Keep everything from the existing requirements that is still valid — do not dr
 user didn't contradict. Add whatever new functional/non-functional needs or assumptions the
 user just confirmed. Only remove or modify an item if the user explicitly contradicted it.`;
 
-    const parsed = await parseRequirementsWithRetry(prompt);
+    const parsed = await parseRequirementsWithRetry(prompt, config);
 
     // If parsing fails, fall back to the existing requirements rather than
     // blocking: canvasAgent already queued legitimate tool_calls this turn, and
@@ -308,7 +311,7 @@ user just confirmed. Only remove or modify an item if the user explicitly contra
   // Node: requirementsAgent — no tools bound. Runs while requirements are not yet
   // confirmed. Purely asks clarifying questions; structurally cannot call tools,
   // so there's no risk of it building prematurely regardless of what it's told.
-  const requirementsAgent = async (state: typeof GraphAnnotation.State) => {
+  const requirementsAgent = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const req = state.requirements ?? DEFAULT_REQUIREMENTS;
     const hasBaseline = req.functional.length > 0 || req.nonFunctional.length > 0 || req.assumptions.length > 0;
 
@@ -331,7 +334,7 @@ built. Do not propose an implementation plan yet; that happens after this. Be co
     );
 
     console.log("[DEBUG] Node: requirementsAgent invoking LLM");
-    const response = await llm.invoke([prompt, ...sanitizeMessages(state.messages)]);
+    const response = await llm.invoke([prompt, ...sanitizeMessages(state.messages)], config);
     return { messages: [response] };
   };
 
@@ -339,7 +342,7 @@ built. Do not propose an implementation plan yet; that happens after this. Be co
   // plan has been approved yet. Proposes (or revises, given feedback) a detailed
   // technology/architecture plan as plain text and asks for approval. Cannot call
   // tools, so the canvas can't be touched until a human explicitly approves.
-  const planAgent = async (state: typeof GraphAnnotation.State) => {
+  const planAgent = async (state: typeof GraphAnnotation.State, config: RunnableConfig) => {
     const req = state.requirements ?? DEFAULT_REQUIREMENTS;
     const priorPlan = state.implementationPlan ?? DEFAULT_PLAN;
     const isRevision = priorPlan.status === "proposed" && priorPlan.content.length > 0;
@@ -380,37 +383,31 @@ toward a "textbook" or "impressive" design:
   it out rather than including it for completeness.
 
 FORMAT — this is as important as the content:
-- Target 150-250 words total. Hard cap 350.
-- One short bullet line per item. No paragraphs, no markdown tables, no sub-bullets more
-  than one level deep.
+- Target 200-400 words total. Hard cap 500.
+- Use bullet points. You may use sub-bullets (up to two levels deep) to detail schemas and fields.
 - No "why not X / alternatives considered" discussion, no generic explanations of what a
   pattern or technology is. State the choice, not the reasoning essay behind it.
 - Skip any section that isn't needed for these requirements entirely (e.g. no caching
   section if nothing warrants a cache).
 - Name real, specific technologies (e.g. "PostgreSQL", "Kafka"), never vague terms like
-  "a suitable database" — but state each in a single clause, not a justified paragraph.
+  "a suitable database".
 
 CONTENT — cover only what applies, each as terse bullets:
-- **Architecture**: one line naming the pattern (monolith/microservices/serverless/event-driven),
-  chosen per the scaling rules above.
+- **Architecture**: one line naming the pattern (monolith/microservices/serverless/event-driven).
 - **Services**: one line per service — name, tech stack, one-clause responsibility, 2-4
-  representative endpoints as "METHOD /path" (no request/response bodies here). For a
-  monolith, this is a single line for the one service.
-- **Data storage**: one line per store — engine + what it holds.
-- **Messaging** (only if the async/decoupling rule above applies): one line — which broker
-  + what flows through it.
-- **Caching** (only if the latency/volume rule above applies): one line — what's cached.
+  representative endpoints as "METHOD /path".
+- **Data storage & Schemas**: one line per store — engine + what it holds. CRITICAL: Include sub-bullets detailing the specific schemas (tables/entities/collections) and their key fields needed to satisfy the functional requirements. These will be modeled as SchemaGroupNodes and Entity nodes.
+- **Messaging** (only if needed): one line — which broker + what flows through it. Mention key event schemas/payloads.
+- **Caching** (only if needed): one line — what's cached.
 - **Client**: one line — framework + how it talks to the backend.
-- **Ops**: EXACTLY two lines, no more — one line for scaling/deployment, one line for
-  security/auth. Do NOT add a monitoring/observability line, a CI/CD line, or any other
-  Ops line beyond these two unless the user's stated requirements explicitly asked for it.
+- **Ops**: one line — scaling/deployment, one line — security/auth.
 
 End with a single short line asking the user to approve or say what to change. Do not
 restate the requirements back to them.`
     );
 
     console.log("[DEBUG] Node: planAgent invoking LLM");
-    const response = await llm.invoke([prompt, ...sanitizeMessages(state.messages.slice(-8))]);
+    const response = await llm.invoke([prompt, ...sanitizeMessages(state.messages.slice(-8))], config);
     const content = response.content.toString();
     const implementationPlan: ImplementationPlanState = { content, status: "proposed" };
 

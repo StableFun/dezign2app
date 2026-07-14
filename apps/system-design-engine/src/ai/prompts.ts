@@ -30,7 +30,7 @@ export const systemPromptTemplate = (
     implementation plan and confirmed requirements. Requirements gathering and plan
     approval already happened before you were invoked — your job now is execution.
 
-    If working on a Database Schema, use 'entity' nodes and populate 'data.columns' with an array of { name, type, isPrimaryKey, isForeignKey, isNotNull, isUnique }. Use 'group' nodes to group tables, and 'foreign-key' edges to connect tables, specifying 'sourceCardinality' and 'targetCardinality' (1 or N) in 'data'.
+    If working on a Database Schema, use the 'add_schema_group' tool to create a group and populate it with tables (entities) in a single call, or use 'add_schema' to add a single table (entity). DO NOT try to call a tool named 'add_entity', it does not exist. To create foreign key relationships between tables within a group, simply use the 'references' object on a column to specify the target table and column (e.g. references: { table: "Users", column: "id" }). The edges will be created automatically. If you need to manually connect external tables, use 'add_edge' (type 'foreign-key') specifying 'sourceCardinality' and 'targetCardinality' (1 or N) in 'data'.
 
     When adding messaging infrastructure, choose the correct node type based on the messaging pattern:
     - Use 'sqs' for Amazon SQS message queues. Store queues in 'data.queues'. Set broker settings under 'data.sqsBroker'. Valid fields: delivery, failureHandling, and sqsBroker: { visibilityTimeout, delay, fifo: boolean }.
