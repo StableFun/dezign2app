@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAuth } from "@clerk/nextjs";
 import { useReactFlow } from "@xyflow/react";
 import { Textarea } from "@workspace/ui/components/textarea";
+import { useBackendCanvasStore } from "@/lib/stores/backendCanvasStore";
 
 interface AiPanelProps {
   projectId: string;
@@ -161,8 +162,35 @@ export function AiPanel({ projectId, isOpen, onClose }: AiPanelProps) {
               });
             } else if (data.type === "tool_call") {
               // The tool mutation is now executed directly on the backend by the agent.
-              // We just optionally show a tiny log message
-              assistantContent += `\n*🔧 Tool used: \`${data.name}\`*\n`;
+              let argsStr = "";
+              if (data.args && Object.keys(data.args).length > 0) {
+                if (data.name === "add_node") {
+                  const label = data.args.label || data.args.data?.label || "Unknown Node";
+                  argsStr = `\nAdded **${label}** (${data.args.type})`;
+                } else if (data.name === "add_service_node") {
+                  const label = data.args.label || "Unknown Service";
+                  argsStr = `\nAdded **${label}** (service)`;
+                } else if (data.name === "add_edge") {
+                  const nodes = useBackendCanvasStore.getState().nodes;
+                  const sourceNode = nodes.find((n) => n.id === data.args.source);
+                  const targetNode = nodes.find((n) => n.id === data.args.target);
+                  const srcLabel = sourceNode?.data?.label || data.args.source;
+                  const tgtLabel = targetNode?.data?.label || data.args.target;
+                  argsStr = `\nConnected **${srcLabel}** → **${tgtLabel}** (${data.args.type})`;
+                } else if (data.name === "update_node") {
+                  const nodes = useBackendCanvasStore.getState().nodes;
+                  const node = nodes.find((n) => n.id === data.args.id);
+                  const label = node?.data?.label || data.args.id;
+                  argsStr = `\nUpdated **${label}**`;
+                } else if (data.name === "delete_node") {
+                  argsStr = `\nDeleted node **${data.args.id}**`;
+                } else if (data.name === "delete_edge") {
+                  argsStr = `\nDeleted edge **${data.args.id}**`;
+                } else {
+                  argsStr = `\n\`\`\`json\n${JSON.stringify(data.args, null, 2)}\n\`\`\`\n`;
+                }
+              }
+              assistantContent += `\n*🔧 Tool used: \`${data.name}\`*${argsStr}\n`;
               setMessages(prev => {
                 const newMsgs = [...prev];
                 const lastMsg = newMsgs[newMsgs.length - 1];

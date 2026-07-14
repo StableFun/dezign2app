@@ -86,9 +86,15 @@ export const entityDataSchema = z
 
 export const simpleDataSchema = z
   .object({
+    label: z.string().optional(),
     description: z.string().optional(),
   })
   .strict();
+
+export const externalDataSchema = simpleDataSchema.extend({
+  baseUrl: z.string().optional(),
+  actions: z.array(resourceItemSchema).optional(),
+});
 
 export const parameterSchema = z.object({
   id: z.string(),
@@ -186,12 +192,12 @@ export const nodeDataSchemas: Record<string, z.ZodTypeAny> = {
   service: serviceDataSchema,
   database: simpleDataSchema,
   webClient: simpleDataSchema,
-  external: simpleDataSchema,
+  external: externalDataSchema,
   group: simpleDataSchema,
 };
 
 export function assignResourceIds<T extends Record<string, unknown>>(data: T): T {
-  const resourceKeys = ["topics", "queues", "channels", "streams"];
+  const resourceKeys = ["topics", "queues", "channels", "streams", "actions"];
   const result = { ...data };
   for (const key of resourceKeys) {
     const list = result[key];

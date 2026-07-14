@@ -12,6 +12,7 @@ import {
   sqsDataSchema,
   redisPubSubDataSchema,
   redisStreamsDataSchema,
+  externalDataSchema,
   nodeDataSchemas,
   assignResourceIds,
 } from "./schemas";
@@ -20,7 +21,7 @@ export const addNodeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("service"), label: z.string(), data: simpleDataSchema.optional() }),
   z.object({ type: z.literal("database"), label: z.string(), data: simpleDataSchema.optional() }),
   z.object({ type: z.literal("webClient"), label: z.string(), data: simpleDataSchema.optional() }),
-  z.object({ type: z.literal("external"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("external"), label: z.string(), data: externalDataSchema.optional() }),
   z.object({ type: z.literal("group"), label: z.string(), data: simpleDataSchema.optional() }),
   z.object({ type: z.literal("entity"), label: z.string(), data: entityDataSchema }),
   z.object({ type: z.literal("kafka"), label: z.string(), data: kafkaDataSchema.optional() }),
@@ -74,7 +75,7 @@ export const addNodeTool = tool(
 - 'redis-streams': Redis Streams broker (data.streams, data.redisBroker)
 - 'entity': A database table/schema entity (data.columns is required)
 - 'webClient': A frontend client or page
-- 'external': An external third-party API
+- 'external': An external third-party API (data.actions, data.baseUrl)
 - 'group': A logical grouping node
 
 Each type only accepts its own data fields. Passing fields from another node type (e.g. sqsBroker on a kafka node) will be rejected.`,
@@ -203,6 +204,7 @@ Important handle rules:
 - Service to Broker (Queue/Kafka/PubSub): sourceHandle="publishedEvents-out-{id}" or "endpoints-out-{id}" -> targetHandle is omitted/empty (type: "message")
 - Broker to Service: sourceHandle is omitted/empty -> targetHandle="consumedEvents-in-{id}" (type: "message")
 - Service to Service: sourceHandle="endpoints-out-{id}" -> targetHandle="endpoints-in-{id}" (type: "connection")
+- Service to External API: sourceHandle="endpoints-out-{id}" -> targetHandle="actions-{id}" (type: "connection")
 - DB Entity to DB Entity: sourceHandle="source-{id}" -> targetHandle="target-{id}" (type: "foreign-key")
 - DB reference: sourceHandle="endpoints-out-{id}" -> targetHandle="database-target" (type: "connection")`,
     schema: z.object({

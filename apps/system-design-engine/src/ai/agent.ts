@@ -1,16 +1,14 @@
 import { ChatGroq } from "@langchain/groq";
 import { StateGraph } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { SystemMessage, AIMessage, BaseMessage } from "@langchain/core/messages";
+import { SystemMessage, AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 
 import { GraphAnnotation, DEFAULT_REQUIREMENTS, DEFAULT_PLAN, requirementsSchema, ImplementationPlanState } from "./state";
 import { tools } from "./tools";
 import { systemPromptTemplate } from "./prompts";
 import { getConvexClient } from "./utils";
 import { api } from "@workspace/backend/_generated/api";
-
-const MAX_TOOL_CALLS = 6;
-
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // ----------------------------------------------------------------------------
 // AGENT NODES
 // ----------------------------------------------------------------------------
@@ -181,6 +179,7 @@ ${conversationContext}`
       systemPromptTemplate(state.canvasStateContext ?? "", state.requirements, state.implementationPlan)
     );
     console.log("[DEBUG] Node: canvasAgent invoking modelWithTools");
+    await delay(1500);
     const response = await modelWithTools.invoke([systemMsg, ...state.messages]);
     return { messages: [response] };
   };
@@ -195,7 +194,7 @@ ${conversationContext}`
 
     const plan = state.implementationPlan ?? DEFAULT_PLAN;
 
-    const reflectionPrompt = new SystemMessage(
+    const reflectionPrompt = new HumanMessage(
       hasFailure
         ? `Some of your last tool calls failed. Review the tool error messages below, correct the parameters, and retry ONLY the failed operations using your tools. If you cannot fix it, explain briefly and stop.\n\nRecent tool results:\n${recentToolMsgs
             .map((m) => m.content)
@@ -218,6 +217,7 @@ ${recentToolMsgs.map((m) => m.content).join("\n")}`
     );
 
     console.log("[DEBUG] Node: reflectAgent invoking modelWithTools");
+    await delay(1500);
     const response = await modelWithTools.invoke([...state.messages, reflectionPrompt]);
     return { messages: [response] };
   };
@@ -470,32 +470,16 @@ restate the requirements back to them.`
 
   // Router: after tools run, always go reflect (unless capped)
   const afterTools = (state: typeof GraphAnnotation.State) => {
-    if ((state.toolCallCount ?? 0) >= MAX_TOOL_CALLS) {
-      return "capReached";
-    }
     return "reflectAgent";
   };
 
   // Router: after reflectAgent decides whether to retry or stop
   const shouldContinueReflect = (state: typeof GraphAnnotation.State) => {
-    if ((state.toolCallCount ?? 0) >= MAX_TOOL_CALLS) {
-      return "capReached";
-    }
     const lastMessage = state.messages[state.messages.length - 1];
     if (lastMessage && "tool_calls" in lastMessage && Array.isArray((lastMessage as AIMessage).tool_calls) && (lastMessage as AIMessage).tool_calls!.length > 0) {
       return "tools";
     }
     return "__end__";
-  };
-
-  const capReached = async (_state: typeof GraphAnnotation.State) => {
-    return {
-      messages: [
-        new AIMessage(
-          "I hit the retry limit while updating the canvas. Some changes may not have applied — please check the canvas or try rephrasing your request."
-        ),
-      ],
-    };
   };
 
   const workflow = new StateGraph(GraphAnnotation)
@@ -508,7 +492,6 @@ restate the requirements back to them.`
     .addNode("canvasAgent", canvasAgent)
     .addNode("tools", customToolNode)
     .addNode("reflectAgent", reflectAgent)
-    .addNode("capReached", capReached)
 
     .addEdge("__start__", "intentIdentifier")
     .addConditionalEdges("intentIdentifier", routeAfterIntent)
@@ -521,9 +504,7 @@ restate the requirements back to them.`
 
     .addConditionalEdges("canvasAgent", shouldContinue)
     .addConditionalEdges("tools", afterTools)
-    .addConditionalEdges("reflectAgent", shouldContinueReflect)
-
-    .addEdge("capReached", "__end__");
+    .addConditionalEdges("reflectAgent", shouldContinueReflect);
 
   return workflow.compile();
 }
