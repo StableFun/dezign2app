@@ -113,8 +113,8 @@ app.post('/canvas-ai', async (c) => {
                const name = call.name;
                // We no longer need to translate and send CanvasOperation
                // because the tools apply mutations directly to Convex.
-               // We just stream a notification to the frontend that a tool was used.
-               await streamWriter.write(JSON.stringify({ type: 'tool_call', name }) + '\n');
+               // We stream a notification to the frontend that a tool was used along with its arguments.
+               await streamWriter.write(JSON.stringify({ type: 'tool_call', name, args: call.args }) + '\n');
              }
           }
         }
