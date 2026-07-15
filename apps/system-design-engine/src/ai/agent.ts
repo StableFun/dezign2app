@@ -483,6 +483,8 @@ CONTENT — cover only what applies, each as terse bullets:
 - **Caching** (only if needed): one line — what's cached.
 - **Client**: one line — framework + how it talks to the backend.
 
+CRITICAL: Do NOT include a deployment plan, hosting details, or infrastructure operations in the architecture plan. Focus strictly on software architecture (services, schemas, APIs, brokers).
+
 End with a single short line asking the user to approve or say what to change. Do not
 restate the requirements back to them.`
     );
