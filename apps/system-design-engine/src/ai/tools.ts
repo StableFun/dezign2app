@@ -4,7 +4,7 @@ import { GraphAnnotation } from "./state";
 import { api } from "@workspace/backend/_generated/api";
 import { Id } from "@workspace/backend/_generated/dataModel";
 import { getConvexClient } from "./utils";
-import { EDGE_TYPE_MAP } from "@workspace/canvas";
+import { EDGE_TYPE_MAP, WEB_CLIENT_EVENTS } from "@workspace/canvas";
 import {
   simpleDataSchema,
   entityDataSchema,
@@ -21,7 +21,7 @@ import {
 export const addNodeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("service"), label: z.string(), data: simpleDataSchema.optional() }),
   z.object({ type: z.literal("db_ref"), label: z.string(), data: dbRefDataSchema.optional() }),
-  z.object({ type: z.literal("webClient"), label: z.string(), data: simpleDataSchema.optional() }),
+  z.object({ type: z.literal("webClient"), label: z.string(), data: z.object({ label: z.string().optional(), description: z.string().optional(), events: z.array(z.any()).optional() }).passthrough().optional() }),
   z.object({ type: z.literal("external"), label: z.string(), data: externalDataSchema.optional() }),
   z.object({ type: z.literal("group"), label: z.string(), data: simpleDataSchema.optional() }),
   z.object({ type: z.literal("entity"), label: z.string(), data: entityDataSchema }),
@@ -110,7 +110,14 @@ export const updateNodeTool = tool(
       const node = elements.nodes.find((n) => n.nodeId === id);
       if (!node) return `Error: Node ${id} not found`;
 
-      const schema = nodeDataSchemas[node.type];
+      let schema = nodeDataSchemas[node.type];
+      if (node.type === "webClient") {
+        schema = z.object({
+          label: z.string().optional(),
+          description: z.string().optional(),
+          events: z.array(z.any()).optional(),
+        }).passthrough();
+      }
       if (!schema) return `Error: Unknown node type '${node.type}' for node ${id}`;
 
       // Validate only the fields being changed, merged onto existing data,
@@ -655,8 +662,9 @@ export const addClientNodeTool = tool(
       label: z.string().describe("Name of the client page/component (e.g., 'Login Page')"),
       description: z.string().optional(),
       events: z.array(z.object({
+        id: z.string().optional().describe("Unique identifier for this event"),
         name: z.string().describe("Logical name of the action (e.g., 'sendMessage', 'fetchData')"),
-        event: z.string().optional().describe("The DOM event that triggers it (e.g., 'click', 'submit', 'pageLoad')"),
+        event: z.enum(WEB_CLIENT_EVENTS).optional().describe("The DOM event that triggers it"),
         targetNodeId: z.string().optional().describe("If this event triggers an API call, specify the target service node ID to AUTOMATICALLY create an edge"),
         targetEndpointId: z.string().optional().describe("If this event triggers an API call, specify the target endpoint ID on the service node to AUTOMATICALLY create an edge"),
       })).optional(),

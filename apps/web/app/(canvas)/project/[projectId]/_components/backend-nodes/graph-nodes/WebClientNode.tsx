@@ -21,8 +21,9 @@ import { Label } from "@workspace/ui/components/label";
 import { Textarea } from "@workspace/ui/components/textarea";
 import { simulateEndpoint, SimulationTraceEntry } from "@/lib/simulation/runtime";
 import { useSimulationStore } from "@/lib/stores/simulationStore";
+import { WEB_CLIENT_EVENTS } from "@workspace/canvas";
 
-const EVENT_OPTIONS = ["pageLoad", "click", "hover", "drag", "dblclick", "keydown", "keyup", "submit", "other"];
+const EVENT_OPTIONS = [...WEB_CLIENT_EVENTS];
 
 function endpointInputParams(endpoint: Endpoint): Parameter[] {
   if (endpoint.params?.length) return endpoint.params.map((param) => ({ ...param, value: param.value ?? param.defaultValue ?? "" }));
@@ -463,9 +464,9 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
                   onClick={() => { 
                       setEditingId(item.id); 
                       setEditName(item.name || "");
-                      const evt = (item.event as string) || item.name;
-                      const isStandard = EVENT_OPTIONS.includes(evt);
-                      setEditEvent(isStandard ? evt : (evt ? "other" : "click")); 
+                      const evt = item.event || item.name || "";
+                      const isStandard = (EVENT_OPTIONS as readonly string[]).includes(evt);
+                      setEditEvent((isStandard ? evt : (evt ? "other" : "click")) as any); 
                       setCustomEvent(isStandard ? "" : evt);
                   }}
                 >

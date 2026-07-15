@@ -24,3 +24,5 @@ export const EDGE_TYPE_MAP: Record<string, string> = {
   "published-event-out→resource-def-in": "message",
   "resource-def-out→consumed-event-in": "message",
 };
+
+export const WEB_CLIENT_EVENTS = ["pageLoad", "click", "hover", "drag", "dblclick", "keydown", "keyup", "submit", "change", "focus", "blur", "mouseenter", "mouseleave", "other"] as const;
