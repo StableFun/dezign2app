@@ -73,7 +73,17 @@ export const DatabaseTableRefNode = ({ id, data, selected }: NodeProps<BackendNo
       <div className="p-2 flex flex-col gap-2">
          <Select 
            value={data.tableRef || ""} 
-           onValueChange={(val) => updateNode(id, { data: { ...data, tableRef: val, label: entities.find(e => e.id === val)?.data.label || "Table Ref" } })}
+           onValueChange={(val) => {
+             const entity = entities.find(e => e.id === val);
+             updateNode(id, { 
+               data: { 
+                 ...data, 
+                 tableRef: val, 
+                 label: entity?.data.label || "Table Ref",
+                 graphPosition: entity?.position
+               } 
+             });
+           }}
          >
            <SelectTrigger className="h-8 text-xs">
              <SelectValue placeholder="Select a Table..." />

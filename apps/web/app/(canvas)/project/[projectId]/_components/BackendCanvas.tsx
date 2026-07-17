@@ -569,7 +569,7 @@ function Flow({ projectId, view }: BackendCanvasProps) {
   // This implies graph view probably doesn't need entity nodes, or if it does, it doesn't need groups.
   // I will just filter out "group".
   
-  const handleAddGraphNode = (type: "service" | "database" | "queue" | "pubsub" | "eventstream" | "kafka" | "redis-streams" | "sqs" | "redis-pubsub" | "webClient" | "external", label: string) => {
+  const handleAddGraphNode = (type: "service" | "db_ref" | "queue" | "pubsub" | "eventstream" | "kafka" | "redis-streams" | "sqs" | "redis-pubsub" | "webClient" | "external", label: string) => {
     const center = getCenterPosition();
     const { x, y } = getOffsetPosition(center.x - 100, center.y - 100);
     addNode({
@@ -661,7 +661,7 @@ function Flow({ projectId, view }: BackendCanvasProps) {
           </Button>
 
           <div className="text-[9px] uppercase font-extrabold text-muted-foreground/60 px-1 pt-2 pb-1 border-t mt-1">Storage & External</div>
-          <Button variant="outline" size="sm" className="bg-sidebar dark:bg-sidebar shadow-sm text-xs justify-start h-8" onClick={() => handleAddGraphNode('database', 'Table Ref')}>
+          <Button variant="outline" size="sm" className="bg-sidebar dark:bg-sidebar shadow-sm text-xs justify-start h-8" onClick={() => handleAddGraphNode('db_ref', 'Table Ref')}>
             <Database className="w-3.5 h-3.5 mr-2" />
             DB Ref
           </Button>
