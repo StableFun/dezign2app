@@ -172,7 +172,7 @@ Be concise in your textual responses. Prefer using tools to update the canvas to
 
   const client = getGroqClient();
   const response = await client.chat.completions.create({
-    model: "openai/gpt-oss-120b",
+    model: "openai/gpt-oss-20b",
     messages: [{ role: "system", content: systemPrompt }, ...messages],
     tools: tools as any,
     tool_choice: "auto",
