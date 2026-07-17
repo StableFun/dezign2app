@@ -180,6 +180,7 @@ export type BackendNode = {
       targetNodeId?: string;
     }[];
     tableRef?: string; // Reference to an entity node ID
+    graphPosition?: { x: number; y: number };
     techStack?: string;
     dbType?: string;
     baseUrl?: string;
