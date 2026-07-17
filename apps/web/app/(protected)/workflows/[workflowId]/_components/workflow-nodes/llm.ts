@@ -14,7 +14,7 @@ export const llmNode: WorkflowNodeDefinition = {
   createDefaultConfig: () =>
     ({
       provider: "groq",
-      model: "openai/gpt-oss-120b",
+      model: "openai/gpt-oss-20b",
       systemPrompt: "",
       prompt: "",
       outputMode: "json",
