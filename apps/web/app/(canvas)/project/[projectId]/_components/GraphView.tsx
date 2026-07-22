@@ -205,9 +205,9 @@ export function GraphView({ projectId }: GraphViewProps) {
         <Controls />
         <MiniMap />
         <Panel position="top-right" className="flex gap-2 flex-col">
-          <Button variant="outline" size="sm" className="bg-sidebar dark:bg-sidebar shadow-sm text-xs" onClick={() => handleLayout("TB")}>
+          <Button variant="outline" size="sm" className="bg-sidebar dark:bg-sidebar shadow-sm text-xs" onClick={() => handleLayout("LR")}>
             <LayoutTemplate className="w-3.5 h-3.5 mr-2" />
-            Auto-layout
+            Auto layout
           </Button>
           {simulation.status !== "idle" && (
             <Button variant="destructive" size="sm" className="shadow-sm text-xs" onClick={simulation.clear}>

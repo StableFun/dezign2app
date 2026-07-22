@@ -11,7 +11,7 @@ export function useAutoLayout() {
   const { nodes, edges, onNodesChange } = useBackendCanvasStore();
 
   const handleLayout = useCallback(
-    (direction = 'TB') => {
+    (direction = 'LR') => {
       const dagreGraph = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
       
       const isHorizontal = direction === 'LR';
@@ -46,6 +46,9 @@ export function useAutoLayout() {
             x: nodeWithPosition.x - width / 2,
             y: nodeWithPosition.y - height / 2,
           },
+          ...(isHorizontal
+            ? { sourcePosition: 'right', targetPosition: 'left' }
+            : { sourcePosition: 'bottom', targetPosition: 'top' }),
         };
       });
 

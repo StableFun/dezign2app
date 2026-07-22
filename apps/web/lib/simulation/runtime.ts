@@ -110,6 +110,9 @@ export async function simulateEndpoint(args: {
   request: SimulationRequest;
   sourceNodeId?: string;
   sourceEventId?: string;
+  /** Pre-resolved ingress edge — pass this for chained service-to-service hops
+   *  so the trace entry carries the correct edgeId and the arrow animates. */
+  resolvedIngressEdge?: BackendEdge;
   mocks?: Record<string, { returnData: JSONValue; status: number }>;
 }): Promise<SimulationResult> {
   const { service, endpoint, nodes, edges, request, mocks } = args;
@@ -125,9 +128,13 @@ export async function simulateEndpoint(args: {
   }
 
   const refs = findEndpointDatabaseRefs(service.id, endpoint, nodes, edges);
-  const ingressEdge = args.sourceNodeId
-    ? edges.find((edge) => edge.source === args.sourceNodeId && edge.target === service.id && edge.sourceHandle === `events-${args.sourceEventId}`)
-    : undefined;
+  // For client→service edges the sourceHandle pattern is `events-{eventId}`.
+  // For service→service chained hops the caller already holds the edge, so
+  // accept it directly via `resolvedIngressEdge` to avoid a failed lookup.
+  const ingressEdge: BackendEdge | undefined = args.resolvedIngressEdge ??
+    (args.sourceNodeId
+      ? edges.find((edge) => edge.source === args.sourceNodeId && edge.target === service.id && edge.sourceHandle === `events-${args.sourceEventId}`)
+      : undefined);
 
   const databaseFor = async (config: Record<string, unknown>) => {
     const requested = resolveValue(config.tableRef, context);
@@ -316,10 +323,15 @@ export async function simulateTestCase(args: {
     return Object.keys(base).length > 0 ? base : undefined;
   };
 
+  // Track the outgoing edge from the previous hop so it can be passed as the
+  // ingress edge when simulateEndpoint runs for the next chained service.
+  let ingressEdgeForNext: BackendEdge | undefined = connectedEdge;
+
   while (current && !visited.has(`${current.service.id}:${current.endpoint.id}`)) {
     const step: { service: BackendNode; endpoint: Endpoint } = current;
     visited.add(`${step.service.id}:${step.endpoint.id}`);
     const isFirst = visited.size === 1;
+
     result = await simulateEndpoint({
       service: step.service,
       endpoint: step.endpoint,
@@ -332,6 +344,13 @@ export async function simulateTestCase(args: {
         params: args.testCase.request?.params ?? {},
         body,
       },
+      // First hop: use sourceNodeId/sourceEventId so simulateEndpoint derives the
+      // client→service edge via the `events-{id}` handle pattern.
+      // Subsequent hops: pass the already-resolved service→service edge directly
+      // so the trace entry carries the correct edgeId and the arrow animates.
+      sourceNodeId: isFirst ? args.client.id : undefined,
+      sourceEventId: isFirst ? args.event.id : undefined,
+      resolvedIngressEdge: isFirst ? undefined : ingressEdgeForNext,
       mocks: isFirst ? buildMocks(step.endpoint.id) : args.testCase.mocks,
     });
     trace.push(...result.trace);
@@ -344,6 +363,11 @@ export async function simulateTestCase(args: {
       edge.targetHandle?.startsWith("endpoint-in-"),
     );
     const nextEndpointId = outgoing?.targetHandle?.split("-in-").pop();
+
+    // Carry this outgoing edge forward so the next iteration can reference it
+    // as its own ingress edge (the arrow that flows into the next service node).
+    ingressEdgeForNext = outgoing;
+
     current = outgoing && nextEndpointId ? findEndpoint(args.nodes, outgoing.target, nextEndpointId, args.endpoints) : undefined;
   }
 
