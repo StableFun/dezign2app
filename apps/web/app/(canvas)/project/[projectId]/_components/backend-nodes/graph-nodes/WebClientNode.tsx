@@ -47,11 +47,16 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
     const targetNode = nodes.find((n) => n.id === edge.target);
     if (!targetNode) return null;
 
-    // If the target handle is a pageload-in handle on another WebClient,
+    // If the target handle is an incoming handle on another WebClient,
     // follow the chain: find that event's outgoing connection to an endpoint.
-    if (edge.targetHandle.startsWith("pageload-in-")) {
-      const pageloadEventId = edge.targetHandle.replace("pageload-in-", "");
-      return getLinkedEndpoint(pageloadEventId, edge.target, depth + 1);
+    if (
+      edge.targetHandle.startsWith("pageload-in-") ||
+      edge.targetHandle.startsWith("sse-in-") ||
+      edge.targetHandle.startsWith("websocket-in-") ||
+      edge.targetHandle.startsWith("ws-in-")
+    ) {
+      const targetEventId = edge.targetHandle.replace(/^(pageload|sse|websocket|ws)-in-/, "");
+      return getLinkedEndpoint(targetEventId, edge.target, depth + 1);
     }
 
     const parts = edge.targetHandle.split("-in-");
@@ -131,6 +136,12 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
           const link = getLinkedEndpoint(item.id);
           const displayEvent = (item.event as string) || item.name;
 
+          const evtStr = (item.event as string) || "";
+          const evtLower = evtStr.toLowerCase();
+          const isPageLoad = evtStr === "pageLoad";
+          const isSse = evtStr === "sse" || evtStr === "sseMessage" || evtLower === "sse";
+          const isWebsocket = evtStr === "websocket" || evtStr === "ws" || evtStr === "websocketMessage" || evtLower === "websocket" || evtLower === "ws";
+
           return (
             <div key={item.id} className="flex flex-col px-3 py-1.5 border-b last:border-b-0 text-xs relative group/row hover:bg-secondary/20 nodrag">
               <Handle 
@@ -140,11 +151,29 @@ const WebClientEventList = ({ nodeId, items = [], updateNode, data, onTriggerEve
                 className="w-2 h-2 -right-1" 
                 style={{ top: '50%' }} 
               />
-              {(item.event as string) === "pageLoad" && (
+              {isPageLoad && (
                 <Handle
                   type="target"
                   position={Position.Left}
                   id={`pageload-in-${item.id}`}
+                  className="w-2 h-2 -left-1"
+                  style={{ top: '50%' }}
+                />
+              )}
+              {isSse && (
+                <Handle
+                  type="target"
+                  position={Position.Left}
+                  id={`sse-in-${item.id}`}
+                  className="w-2 h-2 -left-1"
+                  style={{ top: '50%' }}
+                />
+              )}
+              {isWebsocket && (
+                <Handle
+                  type="target"
+                  position={Position.Left}
+                  id={`websocket-in-${item.id}`}
                   className="w-2 h-2 -left-1"
                   style={{ top: '50%' }}
                 />

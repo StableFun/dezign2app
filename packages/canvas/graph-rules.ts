@@ -1,15 +1,17 @@
 import type { HandleKind } from "./types";
 
 export const CONNECTION_RULES: Record<HandleKind, HandleKind[]> = {
-  "event-source": ["endpoint-in", "pageload-in"],
+  "event-source": ["endpoint-in", "pageload-in", "sse-in", "websocket-in"],
   "endpoint-in": [],
   "pageload-in": [],
-  "endpoint-out": ["database-target", "action-target", "resource-def-in", "endpoint-in", "task-in", "index-in"],
-  "published-event-out": ["resource-def-in", "task-in"],
+  "sse-in": [],
+  "websocket-in": [],
+  "endpoint-out": ["database-target", "action-target", "resource-def-in", "endpoint-in", "task-in", "index-in", "sse-in", "websocket-in", "pageload-in"],
+  "published-event-out": ["resource-def-in", "task-in", "sse-in", "websocket-in"],
   "consumed-event-in": [],
-  "consumed-event-out": ["endpoint-in", "resource-def-in", "task-in", "index-in"],
+  "consumed-event-out": ["endpoint-in", "resource-def-in", "task-in", "index-in", "sse-in", "websocket-in"],
   "resource-def-in": [],
-  "resource-def-out": ["consumed-event-in", "task-in"],
+  "resource-def-out": ["consumed-event-in", "task-in", "sse-in", "websocket-in"],
   "entity-column-source": ["entity-column-target"],
   "entity-column-target": [],
   "entity-top-target": [],
@@ -37,4 +39,4 @@ export const EDGE_TYPE_MAP: Record<string, string> = {
   "endpoint-out→task-in": "connection",
 };
 
-export const WEB_CLIENT_EVENTS = ["pageLoad", "click", "hover", "drag", "dblclick", "keydown", "keyup", "submit", "change", "focus", "blur", "mouseenter", "mouseleave", "other"] as const;
+export const WEB_CLIENT_EVENTS = ["pageLoad", "click", "hover", "drag", "dblclick", "keydown", "keyup", "submit", "change", "focus", "blur", "mouseenter", "mouseleave", "sse", "websocket", "other"] as const;

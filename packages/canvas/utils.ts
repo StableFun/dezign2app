@@ -54,6 +54,8 @@ export function classifyHandle(
   if (id.startsWith("endpoint-out-") || id.startsWith("endpoints-out-") || id.startsWith("routeEndpoints-out-")) return "endpoint-out";
   if (id.startsWith("events-")) return "event-source";
   if (id.startsWith("pageload-in-")) return "pageload-in";
+  if (id.startsWith("sse-in-")) return "sse-in";
+  if (id.startsWith("websocket-in-") || id.startsWith("ws-in-")) return "websocket-in";
   if (id.startsWith("publishedEvents-out-")) return "published-event-out";
   if (id.startsWith("consumedEvents-in-")) return "consumed-event-in";
   if (id.startsWith("consumedEvents-out-")) return "consumed-event-out";
