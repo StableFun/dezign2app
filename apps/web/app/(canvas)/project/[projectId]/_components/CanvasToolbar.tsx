@@ -135,15 +135,6 @@ export function CanvasToolbar({
           variant={"secondary"}
           size="sm"
           className="py-3.5"
-          onClick={() => useSimulationStore.getState().toggleTestExplorer()}
-        >
-          <FlaskConical className="w-4 h-4 mr-2 text-primary" />
-          Test Explorer
-        </Button>
-        <Button
-          variant={"secondary"}
-          size="sm"
-          className="py-3.5"
           onClick={() => setAiPanelOpen(!aiPanelOpen)}
         >
           <Sparkles className="w-4 h-4 mr-2 text-primary" />

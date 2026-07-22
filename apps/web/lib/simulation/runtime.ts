@@ -289,13 +289,16 @@ export async function simulateTestCase(args: {
   let currentEdge = args.edges.find((edge) => edge.source === args.client.id && edge.sourceHandle === `events-${args.event.id}`);
   let depth = 0;
 
-  while (currentEdge && currentEdge.targetHandle?.startsWith("pageload-in-") && depth < 10) {
+  const isIncomingHandle = (handle?: string | null) => 
+    handle?.startsWith("pageload-in-") || handle?.startsWith("sse-in-") || handle?.startsWith("websocket-in-") || handle?.startsWith("ws-in-");
+
+  while (currentEdge && isIncomingHandle(currentEdge.targetHandle) && depth < 10) {
     chainEdges.push(currentEdge);
     const targetNode = args.nodes.find((n) => n.id === currentEdge!.target);
     if (targetNode) chainNodes.push(targetNode);
 
-    const pageloadEventId = currentEdge.targetHandle.replace("pageload-in-", "");
-    const nextEdge = args.edges.find((edge) => edge.source === currentEdge!.target && edge.sourceHandle === `events-${pageloadEventId}`);
+    const linkedEventId = currentEdge.targetHandle!.replace(/^(pageload|sse|websocket|ws)-in-/, "");
+    const nextEdge = args.edges.find((edge) => edge.source === currentEdge!.target && edge.sourceHandle === `events-${linkedEventId}`);
     if (!nextEdge) break;
     currentEdge = nextEdge;
     depth++;

@@ -15,6 +15,8 @@ export type HandleKind =
   // --- WebClient events ---
   | "event-source"
   | "pageload-in"
+  | "sse-in"
+  | "websocket-in"
 
   // --- Service messaging ---
   | "published-event-out"

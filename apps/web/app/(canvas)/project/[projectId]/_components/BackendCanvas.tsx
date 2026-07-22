@@ -21,7 +21,6 @@ import { GraphView } from "./GraphView";
 import { SequenceView } from "./SequenceView";
 import { useChatStore } from "@/app/(protected)/_components/chat/chat-store";
 import { useSimulationStore } from "@/lib/stores/simulationStore";
-import { TestExplorerPanel } from "./TestExplorerPanel";
 
 interface BackendCanvasProps {
   projectId: string;
@@ -100,7 +99,6 @@ export function BackendCanvas(props: BackendCanvasProps) {
         </AlertDialogContent>
       </AlertDialog>
       <ConfigSidebar />
-      <TestExplorerPanel />
       <ChatContainer />
     </>
   );
