@@ -14,10 +14,10 @@ export function createMcpServer() {
   server.registerTool(
     "get_system_design_context",
     {
-      description: "Retrieve semantic architectural context (services, entities, clients, architecture plan) for a given project. Use this to understand the system design before writing code.",
+      description: "PRIMARY TOOL FOR AI CODING AGENTS. Call this tool FIRST to retrieve structured architectural context (services, database entities, web clients, endpoints, data schemas, and test cases/scenarios) for a given project. Use this before writing implementation code or test cases to ensure full alignment with system design specifications and test contracts.",
       inputSchema: {
         projectId: z.string().describe("The ID of the project to retrieve context for"),
-        query: z.string().describe("The specific query to search the architecture for (e.g. 'How does authentication work?' or 'What databases exist?')")
+        query: z.string().describe("The specific query to search the architecture for (e.g., 'How does authentication work?', 'User service schema', or 'Endpoint test cases')")
       }
     },
     async ({ projectId, query }) => {
@@ -38,10 +38,10 @@ export function createMcpServer() {
   server.registerTool(
     "search_system_design_memories",
     {
-      description: "Perform a raw search against the architecture knowledge base for a project. Returns raw matching chunks and metadata.",
+      description: "Granular search tool for AI coding agents. Call this tool to perform raw vector searches against the project architecture knowledge base for specific endpoints, data schemas, entity fields, or custom test case requirements. Returns matching chunks and metadata.",
       inputSchema: {
         projectId: z.string().describe("The ID of the project to search"),
-        query: z.string().describe("The search query string")
+        query: z.string().describe("The search query string (e.g., 'Payment endpoint test cases', 'Redis stream config', or 'User table columns')")
       }
     },
     async ({ projectId, query }) => {

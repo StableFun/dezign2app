@@ -234,12 +234,19 @@ export class SupermemorySync {
       const uniqueNodeChunks = Array.from(dedupedByNode.values());
 
       // 4. Group by kind
+      const testCaseChunks = uniqueNodeChunks.filter(c => c.content.includes("Test Cases:")).map(c => {
+        const lines = c.content.split('\n');
+        const tcIdx = lines.findIndex(l => l.startsWith("Test Cases:"));
+        return tcIdx !== -1 ? `${c.content.split('\n')[0]} - ${lines.slice(tcIdx).join('\n')}` : c.content;
+      });
+
       const context = {
         architecture: architectureChunks.join('\n\n'),
         services: uniqueNodeChunks.filter(c => c.metadata?.kind === 'service').map(c => c.content).slice(0, 5),
         entities: uniqueNodeChunks.filter(c => c.metadata?.kind === 'entity' || c.metadata?.kind === 'db_ref').map(c => c.content).slice(0, 10),
         clients: uniqueNodeChunks.filter(c => c.metadata?.kind === 'webClient').map(c => c.content).slice(0, 5),
-        resources: uniqueNodeChunks.filter(c => c.metadata?.kind === 'kafka' || c.metadata?.kind === 'redis').map(c => c.content).slice(0, 5)
+        resources: uniqueNodeChunks.filter(c => c.metadata?.kind === 'kafka' || c.metadata?.kind === 'redis').map(c => c.content).slice(0, 5),
+        testCases: testCaseChunks.slice(0, 10),
       };
 
       return context;

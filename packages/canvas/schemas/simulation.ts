@@ -19,3 +19,23 @@ export const simulationTestCaseSchema = z.object({
   })).optional(),
 });
 
+export const simulationTestCaseInputSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().describe("Name or description of the test case / scenario"),
+  targetNodeId: z.string().describe("ID of the target service or endpoint node being tested"),
+  targetEventId: z.string().optional().describe("Optional target event ID for event handler test cases"),
+  request: z.object({
+    headers: z.record(z.string()).optional().describe("Request headers for test execution"),
+    params: z.record(z.string()).optional().describe("Path or query parameters for test execution"),
+    body: z.unknown().optional().describe("Request payload / body data for the test case"),
+  }).optional().describe("Request configuration for the test case"),
+  expectedStatus: z.number().optional().describe("Expected HTTP status code (e.g., 200, 201, 400, 404)"),
+  expectedBody: z.unknown().optional().describe("Expected response body or output data structure"),
+  enabled: z.boolean().optional().describe("Whether this test case is active"),
+  mocks: z.record(z.object({
+    status: z.number().optional(),
+    returnData: z.unknown().optional()
+  })).optional().describe("Mock definitions for downstream dependencies during test execution"),
+}).describe("Test case schema for defining unit, integration, and simulation test cases.");
+
+
