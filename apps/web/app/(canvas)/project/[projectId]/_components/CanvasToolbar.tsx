@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Network, Workflow, Sparkles, Database, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, Network, Workflow, Sparkles, Database, RefreshCw, Trash2, Hammer } from "lucide-react";
 import { BackendCanvasView } from "@/types/canvas";
 import { Button } from "@workspace/ui/components/button";
 import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs";
@@ -131,6 +131,15 @@ export function CanvasToolbar({
             </Button>
           </div>
         </div>
+        <Button
+          variant={"secondary"}
+          size="sm"
+          className="py-3.5"
+          onClick={() => setAiPanelOpen(!aiPanelOpen)}
+        >
+          <Hammer className="w-4 h-4 mr-2 text-primary" />
+          Build
+        </Button>
         <Button
           variant={"secondary"}
           size="sm"

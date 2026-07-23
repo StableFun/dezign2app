@@ -7,6 +7,7 @@ import {
   architectureMetadataSchema,
 } from "./shared";
 import { publishedEventSchema, publishedEventInputSchema } from "./events";
+import { simulationTestCaseSchema, simulationTestCaseInputSchema } from "./simulation";
 
 export const endpointSchema = z.object({
   id: z.string(),
@@ -21,6 +22,7 @@ export const endpointSchema = z.object({
   requestBody: schemaModelSchema.optional(),
   responseBody: schemaModelSchema.optional(),
   simulationOutput: z.unknown().optional(),
+  testCases: z.array(simulationTestCaseSchema).optional(),
   processingSteps: z.array(processingStepSchema).optional(),
   publishedEvents: z.array(publishedEventSchema).optional(),
   metadata: architectureMetadataSchema.optional(),
@@ -70,6 +72,7 @@ export const endpointInputSchema: z.ZodType<EndpointInputType> = z.object({
     rawJson: z.string().optional(),
   }).passthrough().describe("Response body schema; define the actual returned fields."),
   simulationOutput: z.unknown().optional().describe("Fixture returned by this endpoint during simulation; passed unchanged to the next connected endpoint."),
+  testCases: z.array(simulationTestCaseInputSchema).optional().describe("Optional list of test cases/scenarios for verifying endpoint implementation."),
   processingSteps: z.array(z.object({
     id: z.string().optional(),
     text: z.string(),

@@ -38,4 +38,6 @@ export {
   nodeDataSchemas,
   edgeDataSchema,
   assignResourceIds,
+  simulationTestCaseSchema,
+  simulationTestCaseInputSchema,
 } from "@workspace/canvas";
