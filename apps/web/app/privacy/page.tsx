@@ -128,8 +128,9 @@ export default function PrivacyPage() {
             <p>
               If you have any questions or concerns about this Privacy Policy or our privacy practices, please contact us at:
             </p>
-            <div className="p-4 bg-gray-50 border border-gray-100 rounded-xl text-gray-800 font-medium">
-              Email: privacy@dezign2app.com
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-xl text-gray-800 font-medium flex flex-col gap-1">
+              <div>Email: <a href="mailto:founder@dezign2app.com" className="text-black font-bold hover:underline">founder@dezign2app.com</a></div>
+              <div className="text-xs text-gray-500">Customer Support & Privacy Inquiries</div>
             </div>
           </section>
         </div>

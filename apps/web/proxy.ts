@@ -4,8 +4,20 @@ import { NextResponse } from "next/server";
 const isPublicRoute = createRouteMatcher([
   "/",
   "/pricing(.*)",
+  "/privacy(.*)",
+  "/terms(.*)",
+  "/terms-and-conditions(.*)",
+  "/docs(.*)",
+  "/tutorials(.*)",
+  "/blog(.*)",
+  "/support(.*)",
+  "/about(.*)",
+  "/careers(.*)",
+  "/contact(.*)",
+  "/partners(.*)",
+  "/changelog(.*)",
+  "/integrations(.*)",
   "/api/public(.*)",
-  "/docs"
 ]);
 
 const isAuthRoute = createRouteMatcher([
